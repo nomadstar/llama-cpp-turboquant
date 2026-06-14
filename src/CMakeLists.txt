@@ -163,6 +163,14 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+# TurboQuant: triattention_gpu_* and turbo_innerq_* live in ggml-cuda.
+# Link it explicitly so libllama.so resolves those symbols at build time.
+if (GGML_CUDA OR GGML_HIP OR GGML_MUSA)
+    if (TARGET ggml-cuda)
+        target_link_libraries(llama PRIVATE ggml-cuda)
+    endif()
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
