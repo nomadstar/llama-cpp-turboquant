@@ -2669,6 +2669,19 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
     kv->set_input_pos_bucket(dst, ubatch);
 }
 
+void llama_kv_cache_context::set_input_block_table(ggml_tensor * dst) const {
+    GGML_ASSERT(dst != nullptr);
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    
+    int32_t * data = (int32_t *) dst->data;
+    const auto & block_table = kv->pa_global_block_table;
+    
+    GGML_ASSERT((size_t) ggml_nelements(dst) == block_table.size());
+    
+    memcpy(data, block_table.data(), block_table.size() * sizeof(int32_t));
+}
+
 //
 // PagedAttention Block Allocator API
 //

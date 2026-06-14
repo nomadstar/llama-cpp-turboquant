@@ -429,6 +429,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    if (block_table) {
+        mctx->set_input_block_table(block_table);
+    }
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -450,6 +454,10 @@ void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    if (block_table) {
+        mctx->set_input_block_table(block_table);
+    }
 }
 
 bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
@@ -476,6 +484,10 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
 
     mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+
+    if (block_table) {
+        mctx->get_base()->set_input_block_table(block_table);
+    }
 }
 
 bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
@@ -1785,6 +1797,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * v,
          ggml_tensor * kq_b,
          ggml_tensor * kq_mask,
+         ggml_tensor * block_table,
+            uint32_t   block_size,
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
                float   kq_scale,
@@ -1824,7 +1838,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f,
+                                  block_table, block_size);
         cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
@@ -2001,7 +2016,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = nullptr;
+    uint32_t block_size = 0;
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, block_table, block_size, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2039,6 +2057,12 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         ggml_set_input(inp->self_kq_mask);
 
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+        if (mctx_cur->get_kv()->pa_total_blocks > 0) {
+            inp->block_table = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_kv()->pa_global_block_table.size());
+            ggml_set_name(inp->block_table, "block_table");
+            ggml_set_input(inp->block_table);
+        }
     }
 
     return inp;
@@ -2104,7 +2128,14 @@ ggml_tensor * llm_graph_context::build_attn(
         q = ggml_turbo_wht(ctx0, q, 0, 0, innerq_scale);  // 0 = forward, 0 = auto group size from q->ne[0]
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = nullptr;
+    uint32_t block_size = 0;
+    if (mctx_cur->get_kv()->pa_total_blocks > 0) {
+        block_table = inp->block_table;
+        block_size = mctx_cur->get_kv()->pa_block_size;
+    }
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, block_table, block_size, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     // TurboQuant: if V was padded, the output has padded dimensions.
@@ -2159,6 +2190,12 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
         ggml_set_input(inp->self_kq_mask);
 
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+        if (mctx_cur->get_kv()->pa_total_blocks > 0) {
+            inp->block_table = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_kv()->pa_global_block_table.size());
+            ggml_set_name(inp->block_table, "block_table");
+            ggml_set_input(inp->block_table);
+        }
     }
 
     return inp;
@@ -2219,7 +2256,14 @@ ggml_tensor * llm_graph_context::build_attn(
         q = ggml_turbo_wht(ctx0, q, 0, 0, innerq_scale);  // 0 = forward, 0 = auto group size
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = nullptr;
+    uint32_t block_size = 0;
+    if (mctx_cur->get_kv()->pa_total_blocks > 0) {
+        block_table = inp->block_table;
+        block_size = mctx_cur->get_kv()->pa_block_size;
+    }
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, block_table, block_size, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     // TurboQuant: if V was padded (MLA: V is view of K, may have padded dim),
@@ -2314,7 +2358,14 @@ ggml_tensor * llm_graph_context::build_attn(
         q = ggml_turbo_wht(ctx0, q, 0, 0, innerq_scale);
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = nullptr;
+    uint32_t block_size = 0;
+    if (mctx_cur->get_base()->get_kv()->pa_total_blocks > 0) {
+        block_table = inp->block_table;
+        block_size = mctx_cur->get_base()->get_kv()->pa_block_size;
+    }
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, block_table, block_size, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     // TurboQuant: if V was padded, extract original V head_dim after inverse WHT
@@ -2384,7 +2435,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = nullptr;
+    uint32_t block_size = 0;
+    // Cross attention without KV blocks ? We'll leave it 0
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, block_table, block_size, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2434,6 +2488,12 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
         inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
         ggml_set_name(inp->self_kq_mask_swa_cnv, "self_kq_mask_swa_cnv");
+    }
+
+    if (mctx_cur->get_base()->get_kv()->pa_total_blocks > 0) {
+        inp->block_table = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_base()->get_kv()->pa_global_block_table.size());
+        ggml_set_name(inp->block_table, "block_table");
+        ggml_set_input(inp->block_table);
     }
 
     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
