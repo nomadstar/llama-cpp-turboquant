@@ -19,10 +19,10 @@ This fork is actively pushing the frontier of local LLM inference. Here's what's
 |---------|--------|
 | TurboQuant CUDA kernels (turbo2/3/4, SM75+) | ✅ **Live** |
 | TriAttention GPU KV-cache pruning | ✅ **Live** |
-| PagedAttention block table (vLLM-style) | 🔨 **In progress** (`feature/paged-attention`) |
+| PagedAttention block table (vLLM-style) | ✅ **Live** (`feature/paged-attention`) |
 | ROCm / HIP backend for TurboQuant FA | ⏳ Partial — needs full validation |
 | Vulkan backend support | 🗺️ Planned |
-| AUR package (`llama-cpp-turboquant-git`) | 📦 Planned |
+| AUR package (`llama-cpp-turboquant-git`) | 📦 **Ready for submission** |
 
 > ⚠️ **Hardware notice:** Current TurboQuant kernels are optimised for **NVIDIA GPUs (CUDA, SM75+)**. Full ROCm (AMD) and Vulkan compatibility is **pending** and will land in upcoming releases.
 
