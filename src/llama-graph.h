@@ -877,6 +877,8 @@ struct llm_graph_context {
             ggml_tensor * v,       // [n_embd_head_v, n_head_v, n_tokens] (v_trans == false)
             ggml_tensor * kq_b,
             ggml_tensor * kq_mask,
+            ggml_tensor * block_table,
+               uint32_t   block_size,
             ggml_tensor * sinks,   // [n_head_q]
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,

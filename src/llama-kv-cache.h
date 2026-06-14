@@ -264,11 +264,13 @@ private:
     const uint32_t n_stream  = 1;
 
     // PagedAttention Internal State
+public:
     uint32_t pa_block_size = 16;
     uint32_t pa_total_blocks = 0;
     std::vector<uint32_t> pa_free_blocks;
     std::unordered_map<llama_seq_id, std::vector<uint32_t>> pa_block_tables;
     std::vector<int32_t> pa_global_block_table; // Maps logical block to physical block
+private:
 
     // required padding
     const uint32_t n_pad = 1;
