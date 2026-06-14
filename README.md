@@ -9,6 +9,23 @@ A fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) with two major addi
 - **TurboQuant** — custom low-bit quantization formats (turbo2, turbo3, turbo4) with hardware-optimised CUDA kernels for faster inference with smaller memory footprint
 - **TriAttention** — GPU-accelerated KV cache pruning ([arXiv 2604.04921](https://arxiv.org/abs/2604.04921)) that scores token importance using RoPE-inverted key vectors and evicts low-value tokens, enabling long-context inference within a fixed memory budget
 
+---
+
+## 🔥 What's Cooking: TurboQuant × PagedAttention
+
+This fork is actively pushing the frontier of local LLM inference. Here's what's live and what's coming:
+
+| Feature | Status |
+|---------|--------|
+| TurboQuant CUDA kernels (turbo2/3/4, SM75+) | ✅ **Live** |
+| TriAttention GPU KV-cache pruning | ✅ **Live** |
+| PagedAttention block table (vLLM-style) | 🔨 **In progress** (`feature/paged-attention`) |
+| ROCm / HIP backend for TurboQuant FA | ⏳ Partial — needs full validation |
+| Vulkan backend support | 🗺️ Planned |
+| AUR package (`llama-cpp-turboquant-git`) | 📦 Planned |
+
+> ⚠️ **Hardware notice:** Current TurboQuant kernels are optimised for **NVIDIA GPUs (CUDA, SM75+)**. Full ROCm (AMD) and Vulkan compatibility is **pending** and will land in upcoming releases.
+
 ## Pre-built Windows Binaries
 
 Download the latest Release build (Windows x64, CUDA 13, RTX 2000+) from Hugging Face:
@@ -86,18 +103,25 @@ All formats have CUDA kernels optimised for Turing+ (SM75) and Ampere (SM80/86) 
 
 ---
 
-## Building from source
+## ⚡ Building from Source
 
 ### Requirements
 
-- Windows 10/11 or Linux
+- Windows 10/11 or Linux (Arch, Ubuntu, Fedora, etc.)
 - CUDA Toolkit 12.x or 13.x
 - Visual Studio 2022+ with C++ workload (Windows) or GCC 11+ (Linux)
 - CMake 3.21+
 
-### Windows (CUDA)
+---
+
+### 🪟 Windows (CUDA)
+
+Requires Visual Studio 2022 with the "Desktop development with C++" workload and the CUDA Toolkit installed.
 
 ```powershell
+git clone https://github.com/atomicmilkshake/llama-cpp-turboquant
+cd llama-cpp-turboquant
+
 cmake -B build -G "Visual Studio 18 2022" -A x64 `
   -DGGML_CUDA=ON `
   -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;120;121"
@@ -105,9 +129,18 @@ cmake -B build -G "Visual Studio 18 2022" -A x64 `
 cmake --build build --config Release --target llama-server -j
 ```
 
-### Linux (CUDA)
+> 💡 Pre-built Windows x64 binaries (CUDA 13, RTX 2000+) are available on [Hugging Face](https://huggingface.co/atomicmilkshake/llama-cpp-turboquant-binaries) — no build required!
+
+---
+
+### 🐧 Linux (CUDA)
+
+Works on any distro with GCC 11+ and the CUDA Toolkit (12.x or 13.x) installed.
 
 ```bash
+git clone https://github.com/atomicmilkshake/llama-cpp-turboquant
+cd llama-cpp-turboquant
+
 cmake -B build \
   -DGGML_CUDA=ON \
   -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;120;121" \
@@ -115,6 +148,35 @@ cmake -B build \
 
 cmake --build build --target llama-server -j$(nproc)
 ```
+
+---
+
+### 🎯 Arch Linux (Native Packaging)
+
+A native `PKGBUILD` for Arch Linux is **in development**, handling CUDA weak stubs, systemd service configuration, and clean package metadata.
+
+For now, build from source using the Linux instructions above. Once the package is ready, it will be submitted to the **AUR** as `llama-cpp-turboquant-git`:
+
+```bash
+# Coming soon — AUR submission in progress
+yay -S llama-cpp-turboquant-git   # or paru, pikaur, etc.
+```
+
+---
+
+### 🍎 macOS (Metal)
+
+TurboQuant CUDA kernels require NVIDIA hardware. On macOS (Apple Silicon), you can still build and use the base llama.cpp functionality with Metal acceleration:
+
+```bash
+git clone https://github.com/atomicmilkshake/llama-cpp-turboquant
+cd llama-cpp-turboquant
+
+cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target llama-server -j$(sysctl -n hw.ncpu)
+```
+
+> ⚠️ TurboQuant quantization formats and TriAttention GPU scoring are **CUDA-only** and will not be available on macOS Metal builds.
 
 ---
 
@@ -139,7 +201,6 @@ cmake --build build --target llama-server -j$(nproc)
 
 *For the original llama.cpp documentation, see [docs/](docs/) or [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp).*
 
-LLM inference in C/C++
 
 ## Recent API changes
 
