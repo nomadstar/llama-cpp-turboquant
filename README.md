@@ -150,6 +150,22 @@ Make sure to run Ollama with parallel processing enabled to take full advantage 
 OLLAMA_NUM_PARALLEL=4 ./ollama serve
 ```
 
+### Building Ollama with Local Changes
+
+If you are modifying `llama-cpp-turboquant` and want to build Ollama against your local changes instead of fetching from GitHub:
+
+1. Clone both repositories side-by-side in the same parent directory:
+   ```bash
+   git clone https://github.com/ollama/ollama
+   git clone https://github.com/atomicmilkshake/llama-cpp-turboquant
+   ```
+2. Because of a fallback built into the Ollama CMake config, configuring Ollama will automatically detect the adjacent `llama-cpp-turboquant` directory and use it instead of downloading from GitHub.
+   ```bash
+   cd ollama
+   cmake -B build .
+   cmake --build build --parallel 8
+   ```
+
 ## Branches
 
 | Branch | Description |
