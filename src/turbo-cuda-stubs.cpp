@@ -16,23 +16,33 @@
 
 #include <cstdint>
 #include <cstring>
+#include "ggml.h"
+#include "ggml-backend.h"
+
+// Dummy strong symbol to force the linker to extract this object file
+// from a static library archive when building llama-server.
+extern "C" {
+GGML_API int ggml_turbo_cuda_stubs_dummy = 1;
+}
 
 // ── InnerQ host-side globals ────────────────────────────────────────────────
 // Defined as weak so libggml-cuda.so can provide the real ones.
 
-__attribute__((weak)) bool  g_innerq_finalized = false;
-__attribute__((weak)) float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS] = {
+extern "C" {
+__attribute__((weak)) GGML_API bool  g_innerq_finalized = false;
+__attribute__((weak)) GGML_API float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS] = {
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 };
 
-__attribute__((weak)) bool turbo_innerq_needs_tensor_update(void) {
+__attribute__((weak)) GGML_API bool turbo_innerq_needs_tensor_update(void) {
     return false;
 }
-__attribute__((weak)) void turbo_innerq_mark_tensor_updated(void) {
+__attribute__((weak)) GGML_API void turbo_innerq_mark_tensor_updated(void) {
     // no-op on CPU-only builds
+}
 }
 
 // ── TriAttention GPU stubs ───────────────────────────────────────────────────
@@ -46,7 +56,7 @@ struct triattention_gpu_config;
 
 extern "C" {
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 triattention_gpu_state * triattention_gpu_init(
     const triattention_gpu_config *,
     const triattention_gpu_head_calib *,
@@ -55,7 +65,7 @@ triattention_gpu_state * triattention_gpu_init(
     return nullptr;
 }
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 void triattention_gpu_score_head(
     triattention_gpu_state *, const void *, uint64_t, size_t,
     uint32_t, uint32_t,
@@ -65,14 +75,14 @@ void triattention_gpu_score_head(
     // no-op
 }
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 void triattention_gpu_scores_to_host(
     float *, const float *, uint32_t, void *)
 {
     // no-op
 }
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 void triattention_gpu_upload_cells(
     uint32_t **, int32_t **,
     const uint32_t *, const int32_t *,
@@ -81,19 +91,19 @@ void triattention_gpu_upload_cells(
     // no-op
 }
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 float * triattention_gpu_alloc_scores(uint32_t, void *)
 {
     return nullptr;
 }
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 void triattention_gpu_free_dev(void *)
 {
     // no-op
 }
 
-__attribute__((weak))
+__attribute__((weak)) GGML_BACKEND_API
 void triattention_gpu_free(triattention_gpu_state *)
 {
     // no-op

@@ -19,6 +19,10 @@
 #include "ggml-backend.h"
 #include "ggml-cuda.h"   // GPU scoring: triattention_gpu_init, _score_head, etc.
 
+extern "C" {
+    // Dummy reference to force linking of turbo-cuda-stubs.cpp.o from static archives
+    extern int ggml_turbo_cuda_stubs_dummy;
+}
 // Block types and dequant declarations are in ggml-common.h (ggml/src/)
 // which is not on the include path for src/. We declare the dequant
 // functions with void* parameters and cast at call sites.
@@ -640,6 +644,10 @@ triattention_state * triattention_init(
     if (!cal) {
         return nullptr;
     }
+
+    // Force linkage of turbo-cuda-stubs.cpp
+    volatile int dummy = ggml_turbo_cuda_stubs_dummy;
+    (void)dummy;
 
     // Validate model compatibility
     if (cal->head_dim != head_dim) {
