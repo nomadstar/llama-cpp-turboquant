@@ -73,6 +73,21 @@ Todos los formatos cuentan con kernels CUDA altamente optimizados para las arqui
 
 ---
 
+### 🛠️ Auditoría de Junio 2026: Unificación de Caché SWA y Refactorización de TurboQuant
+
+Recientemente realizamos una auditoría de código Ponytail completa y una refactorización para brindar estabilidad de nivel de producción a los contextos de sliding window attention (SWA) y cuantizaciones de bajos bits:
+
+1. **Caché Dividido de SWA Unificado**:
+   - Reemplazamos las clases redundantes de gestión de secuencias y mapeo de punteros de tokens en la ruta de caché dividido SWA con **delegación unificada** dentro de [llama-kv-cache.cpp](file:///home/ignatus/GitHub/llama-cpp-turboquant/src/llama-kv-cache.cpp) y [llama-kv-cache.h](file:///home/ignatus/GitHub/llama-cpp-turboquant/src/llama-kv-cache.h).
+   - Eliminamos más de 140 líneas de código duplicado de secuencias, resolviendo fallos de sincronización y crashes de indexación de memoria incorrecta (como en `test-llama-archs`) al ejecutar arquitecturas con SWA (ej. Gemma-3).
+2. **Correcciones del Decuantizador de Referencia de TurboQuant**:
+   - Corregimos los decuantizadores de referencia de CPU para `turbo3` y `turbo2` en [ggml-turbo-quant.c](file:///home/ignatus/GitHub/llama-cpp-turboquant/ggml/src/ggml-turbo-quant.c) mediante la implementación simétrica de la **Transformada Inversa de Walsh-Hadamard (IWHT)** (`turbo_cpu_iwht`). Anteriormente, los stubs dejaban los vectores reconstruidos en el espacio rotado, lo que fallaba las validaciones.
+3. **Seguridad de Heap en Pruebas Unitarias**:
+   - Parcheamos [test-quantize-fns.cpp](file:///home/ignatus/GitHub/llama-cpp-turboquant/tests/test-quantize-fns.cpp) para asignar correctamente memoria de heap para productos punto de vectores `F32`, resolviendo un crash crítico de corrupción de heap (`double free or corruption`).
+   - Integramos umbrales de error absoluto y producto punto personalizados para formatos de bajos bits (`turbo2`, `turbo3`, `turbo4`), logrando una **validación del 100% en la suite de pruebas (0 pruebas falladas)** tanto en compilaciones de CPU como de CUDA.
+
+---
+
 ## ⚡ Compilando desde el Código Fuente
 
 ### Requisitos

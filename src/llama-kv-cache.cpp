@@ -50,9 +50,52 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                     bool   swa_split,
+                     bool   swa_full,
+                 uint32_t   n_ubatch) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+
+    if (swa_split && hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        is_split = true;
+
+        // chain filters
+        const layer_filter_cb filter_base = [&](int32_t il) {
+            if (filter && !filter(il)) {
+                return false;
+            }
+            return !model.hparams.is_swa(il);
+        };
+
+        const layer_filter_cb filter_swa  = [&](int32_t il) {
+            if (filter && !filter(il)) {
+                return false;
+            }
+            return model.hparams.is_swa(il);
+        };
+
+        const uint32_t size_base = kv_size;
+        uint32_t size_swa = GGML_PAD(std::min(size_base, hparams.n_swa*(unified ? n_seq_max : 1) + n_ubatch), 256);
+
+        if (swa_full) {
+            LLAMA_LOG_WARN("%s: using full-size SWA cache\n", __func__);
+            size_swa = size_base;
+        }
+
+        LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, size_base);
+        kv_base = std::make_unique<llama_kv_cache>(
+                model, type_k, type_v,
+                v_trans, offload, unified, size_base, n_seq_max, n_pad,
+                0, LLAMA_SWA_TYPE_NONE, filter_base, reuse, false, false, 0);
+
+        LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
+        kv_swa = std::make_unique<llama_kv_cache>(
+                model, type_k, type_v,
+                v_trans, offload, unified, size_swa, n_seq_max, n_pad,
+                hparams.n_swa, hparams.swa_type, filter_swa, reuse, false, false, 0);
+        return;
+    }
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -383,6 +426,11 @@ llama_kv_cache::~llama_kv_cache() {
 }
 
 void llama_kv_cache::clear(bool data) {
+    if (is_split) {
+        kv_base->clear(data);
+        kv_swa->clear(data);
+        return;
+    }
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
@@ -413,6 +461,12 @@ void llama_kv_cache::clear(bool data) {
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    if (is_split) {
+        bool res = true;
+        res = res && kv_base->seq_rm(seq_id, p0, p1);
+        res = res && kv_swa->seq_rm(seq_id, p0, p1);
+        return res;
+    }
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
     if (p0 < 0) {
@@ -478,6 +532,11 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 }
 
 void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    if (is_split) {
+        kv_base->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+        kv_swa->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+        return;
+    }
     GGML_ASSERT(seq_id_src >= 0 && (size_t) seq_id_src < seq_to_stream.size());
     GGML_ASSERT(seq_id_dst >= 0 && (size_t) seq_id_dst < seq_to_stream.size());
 
@@ -565,6 +624,11 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
 }
 
 void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+    if (is_split) {
+        kv_base->seq_keep(seq_id);
+        kv_swa->seq_keep(seq_id);
+        return;
+    }
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -587,6 +651,11 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
 }
 
 void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
+    if (is_split) {
+        kv_base->seq_add(seq_id, p0, p1, shift);
+        kv_swa->seq_add(seq_id, p0, p1, shift);
+        return;
+    }
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_add() is only supported for n_pos_per_embd() == 1");
 
@@ -635,6 +704,11 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
 }
 
 void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+    if (is_split) {
+        kv_base->seq_div(seq_id, p0, p1, d);
+        kv_swa->seq_div(seq_id, p0, p1, d);
+        return;
+    }
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_div() is only supported for n_pos_per_embd() == 1");
 
@@ -669,6 +743,9 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
 }
 
 llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
+    if (is_split) {
+        return kv_swa->seq_pos_min(seq_id);
+    }
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -677,6 +754,9 @@ llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
 }
 
 llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
+    if (is_split) {
+        return kv_swa->seq_pos_max(seq_id);
+    }
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -685,6 +765,13 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
+    if (is_split) {
+        std::map<ggml_backend_buffer_type_t, size_t> mb = kv_base->memory_breakdown();
+        for (const auto & buft_size : kv_swa->memory_breakdown()) {
+            mb[buft_size.first] += buft_size.second;
+        }
+        return mb;
+    }
     std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const auto & [ctx, buf] : ctxs_bufs) {
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
@@ -706,6 +793,87 @@ llama_memory_context_ptr llama_kv_cache::init_batch(
             uint32_t n_ubatch,
             bool embd_all) {
     GGML_UNUSED(embd_all);
+
+    if (is_split) {
+        // first try simple split
+        do {
+            if (n_stream > 1) {
+                // requires equal splits, so we skip the simple split
+                break;
+            }
+
+            balloc.split_reset();
+
+            std::vector<llama_ubatch> ubatches;
+            while (true) {
+                auto ubatch = balloc.split_simple(n_ubatch);
+
+                if (ubatch.n_tokens == 0) {
+                    break;
+                }
+
+                ubatches.push_back(std::move(ubatch)); // NOLINT
+            }
+
+            if (balloc.get_n_used() < balloc.get_n_tokens()) {
+                // failed to find a suitable split
+                break;
+            }
+
+            auto sinfos_base = kv_base->prepare(ubatches);
+            if (sinfos_base.empty()) {
+                break;
+            }
+
+            auto sinfos_swa = kv_swa->prepare(ubatches);
+            if (sinfos_swa.empty()) {
+                break;
+            }
+
+            assert(sinfos_base.size() == sinfos_swa.size());
+
+            return std::make_unique<llama_kv_cache_context>(
+                    this, std::move(sinfos_base), std::move(sinfos_swa), std::move(ubatches));
+        } while (false);
+
+        // if it fails, try equal split
+        do {
+            balloc.split_reset();
+
+            std::vector<llama_ubatch> ubatches;
+            while (true) {
+                auto ubatch = balloc.split_equal(n_ubatch, n_stream > 1);
+
+                if (ubatch.n_tokens == 0) {
+                    break;
+                }
+
+                ubatches.push_back(std::move(ubatch)); // NOLINT
+            }
+
+            if (balloc.get_n_used() < balloc.get_n_tokens()) {
+                // failed to find a suitable split
+                break;
+            }
+
+            auto sinfos_base = kv_base->prepare(ubatches);
+            if (sinfos_base.empty()) {
+                break;
+            }
+
+            auto sinfos_swa = kv_swa->prepare(ubatches);
+            if (sinfos_swa.empty()) {
+                break;
+            }
+
+            assert(sinfos_base.size() == sinfos_swa.size());
+
+            return std::make_unique<llama_kv_cache_context>(
+                    this, std::move(sinfos_base), std::move(sinfos_swa), std::move(ubatches));
+        } while (false);
+
+        return std::make_unique<llama_kv_cache_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+    }
 
     do {
         balloc.split_reset();
@@ -743,6 +911,9 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
 }
 
 llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
+    if (is_split) {
+        return std::make_unique<llama_kv_cache_context>(this, lctx, optimize);
+    }
     GGML_UNUSED(optimize);
 
     bool do_shift = get_has_shift();
@@ -1195,6 +1366,11 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 }
 
 bool llama_kv_cache::get_can_shift() const {
+    if (is_split) {
+        return kv_base->get_can_shift() &&
+               kv_swa->get_can_shift() &&
+               kv_base->get_size() == kv_swa->get_size();
+    }
     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
     if (model.arch == LLM_ARCH_STEP35) {
         return false;
@@ -1206,16 +1382,25 @@ bool llama_kv_cache::get_can_shift() const {
 }
 
 uint32_t llama_kv_cache::get_size() const {
+    if (is_split) {
+        return kv_base->get_size();
+    }
     const auto & cells = v_cells[seq_to_stream[0]];
 
     return cells.size();
 }
 
 uint32_t llama_kv_cache::get_n_stream() const {
+    if (is_split) {
+        return kv_base->get_n_stream();
+    }
     return n_stream;
 }
 
 bool llama_kv_cache::get_has_shift() const {
+    if (is_split) {
+        return kv_base->get_has_shift() || kv_swa->get_has_shift();
+    }
     bool result = false;
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1919,6 +2104,13 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 }
 
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    if (is_split) {
+        if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
+            kv_base->state_write(io, seq_id, flags);
+        }
+        kv_swa->state_write(io, seq_id, flags);
+        return;
+    }
     GGML_UNUSED(flags);
 
     io.write(&n_stream, sizeof(n_stream));
@@ -1972,6 +2164,13 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
 }
 
 void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    if (is_split) {
+        if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
+            kv_base->state_read(io, seq_id, flags);
+        }
+        kv_swa->state_read(io, seq_id, flags);
+        return;
+    }
     GGML_UNUSED(flags);
 
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
@@ -2563,6 +2762,17 @@ llama_kv_cache_context::~llama_kv_cache_context() = default;
 bool llama_kv_cache_context::next() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
+    if (is_split) {
+        ctx_base->next();
+        ctx_swa ->next();
+
+        if (++i_next >= ubatches.size()) {
+            return false;
+        }
+
+        return true;
+    }
+
     if (++i_cur >= ubatches.size()) {
         return false;
     }
@@ -2572,6 +2782,15 @@ bool llama_kv_cache_context::next() {
 
 bool llama_kv_cache_context::apply() {
     assert(!llama_memory_status_is_fail(status));
+
+    if (is_split) {
+        bool res = true;
+
+        res = res & ctx_base->apply();
+        res = res & ctx_swa ->apply();
+
+        return res;
+    }
 
     // no ubatches -> this is a KV cache update
     if (ubatches.empty()) {
@@ -2603,79 +2822,161 @@ llama_memory_status llama_kv_cache_context::get_status() const {
 const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
+    if (is_split) {
+        return ubatches[i_next];
+    }
     return ubatches[i_cur];
 }
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
+    if (is_split) {
+        return static_cast<const llama_kv_cache_context *>(ctx_base.get())->get_n_kv();
+    }
     return n_kv;
 }
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
+    if (is_split) {
+        if (kv->hparams.is_swa(il)) {
+            return static_cast<const llama_kv_cache_context *>(ctx_swa.get())->get_k(ctx, il);
+        } else {
+            return static_cast<const llama_kv_cache_context *>(ctx_base.get())->get_k(ctx, il);
+        }
+    }
     return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
 }
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
+    if (is_split) {
+        if (kv->hparams.is_swa(il)) {
+            return static_cast<const llama_kv_cache_context *>(ctx_swa.get())->get_v(ctx, il);
+        } else {
+            return static_cast<const llama_kv_cache_context *>(ctx_base.get())->get_v(ctx, il);
+        }
+    }
     return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {
+    if (is_split) {
+        return static_cast<const llama_kv_cache_context *>(ctx_base.get())->get_turbo_rotation();
+    }
     return kv->get_turbo_rotation();
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rotation_inv() const {
+    if (is_split) {
+        return static_cast<const llama_kv_cache_context *>(ctx_base.get())->get_turbo_rotation_inv();
+    }
     return kv->get_turbo_rotation_inv();
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
+    if (is_split) {
+        return ctx_base->get_turbo_rot_forward();
+    }
     return kv->get_turbo_rotation();
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
+    if (is_split) {
+        return ctx_base->get_turbo_rot_inverse();
+    }
     return kv->get_turbo_rotation_inv();
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
+    if (is_split) {
+        return ctx_base->get_turbo_innerq_scale_inv();
+    }
     return kv->get_turbo_innerq_scale_inv();
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
+    if (is_split) {
+        if (kv->hparams.is_swa(il)) {
+            return static_cast<const llama_kv_cache_context *>(ctx_swa.get())->cpy_k(ctx, k_cur, k_idxs, il);
+        } else {
+            return static_cast<const llama_kv_cache_context *>(ctx_base.get())->cpy_k(ctx, k_cur, k_idxs, il);
+        }
+    }
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const {
+    if (is_split) {
+        if (kv->hparams.is_swa(il)) {
+            return static_cast<const llama_kv_cache_context *>(ctx_swa.get())->cpy_v(ctx, v_cur, v_idxs, il);
+        } else {
+            return static_cast<const llama_kv_cache_context *>(ctx_base.get())->cpy_v(ctx, v_cur, v_idxs, il);
+        }
+    }
     return kv->cpy_v(ctx, v_cur, v_idxs, il, sinfos[i_cur]);
 }
 
 ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
+    if (is_split) {
+        return static_cast<const llama_kv_cache_context *>(ctx_base.get())->build_input_k_idxs(ctx, ubatch);
+    }
     return kv->build_input_k_idxs(ctx, ubatch);
 }
 
 ggml_tensor * llama_kv_cache_context::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
+    if (is_split) {
+        return static_cast<const llama_kv_cache_context *>(ctx_base.get())->build_input_v_idxs(ctx, ubatch);
+    }
     return kv->build_input_v_idxs(ctx, ubatch);
 }
 
 void llama_kv_cache_context::set_input_k_shift(ggml_tensor * dst) const {
+    if (is_split) {
+        static_cast<const llama_kv_cache_context *>(ctx_base.get())->set_input_k_shift(dst);
+        return;
+    }
     kv->set_input_k_shift(dst);
 }
 
 void llama_kv_cache_context::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    if (is_split) {
+        static_cast<const llama_kv_cache_context *>(ctx_base.get())->set_input_k_idxs(dst, ubatch);
+        return;
+    }
     kv->set_input_k_idxs(dst, ubatch, sinfos[i_cur]);
 }
 
 void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    if (is_split) {
+        static_cast<const llama_kv_cache_context *>(ctx_base.get())->set_input_v_idxs(dst, ubatch);
+        return;
+    }
     kv->set_input_v_idxs(dst, ubatch, sinfos[i_cur]);
 }
 
 void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+    if (is_split) {
+        static_cast<const llama_kv_cache_context *>(ctx_base.get())->set_input_kq_mask(dst, ubatch, causal_attn);
+        return;
+    }
     kv->set_input_kq_mask(dst, ubatch, causal_attn);
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    if (is_split) {
+        static_cast<const llama_kv_cache_context *>(ctx_base.get())->set_input_pos_bucket(dst, ubatch);
+        return;
+    }
     kv->set_input_pos_bucket(dst, ubatch);
 }
 
 void llama_kv_cache_context::set_input_block_table(ggml_tensor * dst) const {
+    if (is_split) {
+        static_cast<const llama_kv_cache_context *>(ctx_base.get())->set_input_block_table(dst);
+        return;
+    }
     GGML_ASSERT(dst != nullptr);
+    if (dst->buffer == nullptr) {
+        return;
+    }
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     
@@ -2692,6 +2993,10 @@ void llama_kv_cache_context::set_input_block_table(ggml_tensor * dst) const {
 //
 
 void llama_kv_cache::block_allocator_init(uint32_t total_tokens, uint32_t block_size) {
+    if (is_split) {
+        kv_base->block_allocator_init(total_tokens, block_size);
+        kv_swa->block_allocator_init(total_tokens, block_size);
+    }
     this->pa_block_size = block_size;
     this->pa_total_blocks = total_tokens / block_size;
     
@@ -2714,6 +3019,10 @@ void llama_kv_cache::block_allocator_init(uint32_t total_tokens, uint32_t block_
 }
 
 int32_t llama_kv_cache::block_allocate() {
+    if (is_split) {
+        kv_swa->block_allocate();
+        return kv_base->block_allocate();
+    }
     if (pa_free_blocks.empty()) {
         return -1; // Out of Memory (OOM)
     }
@@ -2725,10 +3034,18 @@ int32_t llama_kv_cache::block_allocate() {
 }
 
 void llama_kv_cache::block_free(uint32_t block_id) {
+    if (is_split) {
+        kv_base->block_free(block_id);
+        kv_swa->block_free(block_id);
+        return;
+    }
     pa_free_blocks.push_back(block_id);
 }
 
 const std::vector<uint32_t> & llama_kv_cache::get_block_table(llama_seq_id seq_id) const {
+    if (is_split) {
+        return kv_base->get_block_table(seq_id);
+    }
     auto it = pa_block_tables.find(seq_id);
     if (it != pa_block_tables.end()) {
         return it->second;
@@ -2736,4 +3053,45 @@ const std::vector<uint32_t> & llama_kv_cache::get_block_table(llama_seq_id seq_i
     
     static const std::vector<uint32_t> empty_table;
     return empty_table;
+}
+
+llama_kv_cache * llama_kv_cache::get_base() const {
+    return kv_base.get();
+}
+
+llama_kv_cache * llama_kv_cache::get_swa() const {
+    return kv_swa.get();
+}
+
+const llama_kv_cache_context * llama_kv_cache_context::get_base() const {
+    assert(is_split);
+    return static_cast<const llama_kv_cache_context *>(ctx_base.get());
+}
+
+const llama_kv_cache_context * llama_kv_cache_context::get_swa() const {
+    assert(is_split);
+    return static_cast<const llama_kv_cache_context *>(ctx_swa.get());
+}
+
+llama_kv_cache_context::llama_kv_cache_context(
+        llama_kv_cache * kv,
+        llama_context * lctx,
+        bool optimize) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), is_split(true),
+    ctx_base(kv->get_base()->init_update(lctx, optimize)),
+    ctx_swa (kv->get_swa ()->init_update(lctx, optimize)) {
+    status = llama_memory_status_combine(ctx_base->get_status(), ctx_swa->get_status());
+}
+
+llama_kv_cache_context::llama_kv_cache_context(
+        llama_kv_cache * kv,
+        slot_info_vec_t sinfos_base,
+        slot_info_vec_t sinfos_swa,
+        std::vector<llama_ubatch> ubatches) :
+    status(LLAMA_MEMORY_STATUS_SUCCESS),
+    kv(kv),
+    ubatches(std::move(ubatches)),
+    is_split(true),
+    ctx_base(new llama_kv_cache_context(kv->get_base(), std::move(sinfos_base), this->ubatches)),
+    ctx_swa (new llama_kv_cache_context(kv->get_swa (), std::move(sinfos_swa),  this->ubatches)) {
+    status = llama_memory_status_combine(ctx_base->get_status(), ctx_swa->get_status());
 }

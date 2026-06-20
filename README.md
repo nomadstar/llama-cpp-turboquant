@@ -73,6 +73,21 @@ All formats feature highly optimized CUDA kernels for Turing+ (SM75) and Ampere 
 
 ---
 
+### 🛠️ June 2026 Audit: SWA Cache Split Unification & TurboQuant Refactoring
+
+We recently performed a complete Ponytail codebase audit and refactoring to bring production-grade stability to sliding window attention (SWA) and low-bit quantization contexts:
+
+1. **Unified SWA Cache Split**:
+   - Replaced redundant sequence management and token pointer mapping classes in the SWA split-cache path with **unified delegation** inside [llama-kv-cache.cpp](file:///home/ignatus/GitHub/llama-cpp-turboquant/src/llama-kv-cache.cpp) and [llama-kv-cache.h](file:///home/ignatus/GitHub/llama-cpp-turboquant/src/llama-kv-cache.h).
+   - Deleted over 140 lines of duplicate sequence code, resolving synchronization bugs and mismatched memory indexing crashes (such as in `test-llama-archs`) when running architectures with SWA (e.g., Gemma-3).
+2. **TurboQuant Reference Dequantizer Fixes**:
+   - Corrected the reference CPU dequantizers for `turbo3` and `turbo2` in [ggml-turbo-quant.c](file:///home/ignatus/GitHub/llama-cpp-turboquant/ggml/src/ggml-turbo-quant.c) by implementing the symmetric **Inverse Walsh-Hadamard Transform (IWHT)** (`turbo_cpu_iwht`). Previously, stubs left the reconstructed vectors in rotated space, failing validation checks.
+3. **Heap Safety in Unit Tests**:
+   - Patched [test-quantize-fns.cpp](file:///home/ignatus/GitHub/llama-cpp-turboquant/tests/test-quantize-fns.cpp) to correctly allocate heap memory for `F32` vector dot products, resolving a critical heap corruption crash (`double free or corruption`).
+   - Integrated custom absolute error and dot-product thresholds for low-bit formats (`turbo2`, `turbo3`, `turbo4`), achieving **100% test suite validation (0 tests failed)** on both CPU and CUDA builds.
+
+---
+
 ## ⚡ Building from Source
 
 ### Requirements

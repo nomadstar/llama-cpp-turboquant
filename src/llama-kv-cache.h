@@ -20,6 +20,7 @@ struct triattention_config;
 //
 
 class llama_kv_cache : public llama_memory_i {
+    friend class llama_kv_cache_context;
 public:
     struct stream_copy_info {
         bool empty() const {
@@ -108,7 +109,10 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                         bool   swa_split = false,
+                         bool   swa_full = false,
+                     uint32_t   n_ubatch = 0);
 
     ~llama_kv_cache();
 
@@ -339,11 +343,20 @@ private:
         std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
     };
 
+public:
+    llama_kv_cache * get_base() const;
+    llama_kv_cache * get_swa() const;
+
     void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
 
     bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+
+private:
+    bool is_split = false;
+    std::unique_ptr<llama_kv_cache> kv_base;
+    std::unique_ptr<llama_kv_cache> kv_swa;
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {
@@ -366,11 +379,27 @@ public:
             bool do_shift,
             stream_copy_info sc_info);
 
+    // used to create an update context when is_split is true
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            llama_context * lctx,
+            bool optimize);
+
     // used to create a batch processing context from a batch
     llama_kv_cache_context(
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
+
+    // used to create a split batch processing context
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            slot_info_vec_t sinfos_base,
+            slot_info_vec_t sinfos_swa,
+            std::vector<llama_ubatch> ubatches);
+
+    const llama_kv_cache_context * get_base() const;
+    const llama_kv_cache_context * get_swa()  const;
 
     virtual ~llama_kv_cache_context();
 
@@ -462,4 +491,9 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    bool is_split = false;
+    const llama_memory_context_ptr ctx_base = nullptr;
+    const llama_memory_context_ptr ctx_swa = nullptr;
+    size_t i_next = 0;
 };
