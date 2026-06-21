@@ -331,44 +331,35 @@ void quantize_row_turbo3_0_ref(const float * GGML_RESTRICT x, block_turbo3_0 * G
 }
 
 void dequantize_row_turbo3_0(const block_turbo3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_TURBO3 == 0);
-
     extern int turbo3_cpu_wht_group_size;
     int group_size = turbo3_cpu_wht_group_size;
     if (group_size != 64 && group_size != 128) {
-        group_size = (k % 128 == 0) ? 128 : 64;
+        group_size = 128;
     }
-    if (k % group_size != 0) group_size = (group_size == 128) ? 64 : 128;
-    assert(k % group_size == 0);
-    assert(group_size <= 256);
 
-    const int n_groups = (int)(k / group_size);
-    const int blocks_per_group = group_size / QK_TURBO3;
-
+    const int n_groups = (int)((k + group_size - 1) / group_size);
     for (int g = 0; g < n_groups; g++) {
-        float buf[256];
-        const block_turbo3_0 * grp_src = x + g * blocks_per_group;
-        float * grp_dst = y + g * group_size;
-
-        // 1. Unpack centroids into group buffer
-        for (int b = 0; b < blocks_per_group; b++) {
-            const block_turbo3_0 * blk = &grp_src[b];
-            const int off = b * QK_TURBO3;
-            for (int j = 0; j < QK_TURBO3; j++) {
-                uint8_t low2 = (blk->qs[j/4] >> ((j%4)*2)) & 0x3;
-                uint8_t hi1 = (blk->signs[j/8] >> (j%8)) & 0x1;
-                uint8_t idx = low2 | (hi1 << 2);
-                buf[off + j] = CENTROIDS_3BIT[idx];
-            }
+        float buf[128];
+        for (int j = 0; j < group_size; j++) {
+            int global_idx = g * group_size + j;
+            int b = global_idx / QK_TURBO3;
+            int off = global_idx % QK_TURBO3;
+            const block_turbo3_0 * blk = &x[b];
+            uint8_t low2 = (blk->qs[off/4] >> ((off%4)*2)) & 0x3;
+            uint8_t hi1 = (blk->signs[off/8] >> (off%8)) & 0x1;
+            uint8_t idx = low2 | (hi1 << 2);
+            buf[j] = CENTROIDS_3BIT[idx];
         }
 
-        // 2. Inverse WHT rotation
-        turbo_cpu_iwht(buf, group_size);
-
-        // 3. Scale by norm and write to destination
-        float norm = GGML_FP16_TO_FP32(grp_src[0].norm);
-        for (int j = 0; j < group_size; j++) {
-            grp_dst[j] = buf[j] * norm;
+        int b = (g * group_size) / QK_TURBO3;
+        float norm = GGML_FP16_TO_FP32(x[b].norm);
+        
+        int n_copy = group_size;
+        if ((g + 1) * group_size > k) {
+            n_copy = k - g * group_size;
+        }
+        for (int j = 0; j < n_copy; j++) {
+            y[g * group_size + j] = buf[j] * norm;
         }
     }
 }
@@ -450,42 +441,33 @@ void quantize_row_turbo2_0_ref(const float * GGML_RESTRICT x, block_turbo2_0 * G
 }
 
 void dequantize_row_turbo2_0(const block_turbo2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_TURBO2 == 0);
-
     extern int turbo3_cpu_wht_group_size;
     int group_size = turbo3_cpu_wht_group_size;
     if (group_size != 64 && group_size != 128) {
-        group_size = (k % 128 == 0) ? 128 : 64;
+        group_size = 128;
     }
-    if (k % group_size != 0) group_size = (group_size == 128) ? 64 : 128;
-    assert(k % group_size == 0);
-    assert(group_size <= 256);
 
-    const int n_groups = (int)(k / group_size);
-    const int blocks_per_group = group_size / QK_TURBO2;
-
+    const int n_groups = (int)((k + group_size - 1) / group_size);
     for (int g = 0; g < n_groups; g++) {
-        float buf[256];
-        const block_turbo2_0 * grp_src = x + g * blocks_per_group;
-        float * grp_dst = y + g * group_size;
-
-        // 1. Unpack centroids into group buffer
-        for (int b = 0; b < blocks_per_group; b++) {
-            const block_turbo2_0 * blk = &grp_src[b];
-            const int off = b * QK_TURBO2;
-            for (int j = 0; j < QK_TURBO2; j++) {
-                uint8_t idx = (blk->qs[j/4] >> ((j%4)*2)) & 0x3;
-                buf[off + j] = CENTROIDS_2BIT[idx];
-            }
+        float buf[128];
+        for (int j = 0; j < group_size; j++) {
+            int global_idx = g * group_size + j;
+            int b = global_idx / QK_TURBO2;
+            int off = global_idx % QK_TURBO2;
+            const block_turbo2_0 * blk = &x[b];
+            uint8_t idx = (blk->qs[off/4] >> ((off%4)*2)) & 0x3;
+            buf[j] = CENTROIDS_2BIT[idx];
         }
 
-        // 2. Inverse WHT rotation
-        turbo_cpu_iwht(buf, group_size);
-
-        // 3. Scale by norm and write to destination
-        float norm = GGML_FP16_TO_FP32(grp_src[0].norm);
-        for (int j = 0; j < group_size; j++) {
-            grp_dst[j] = buf[j] * norm;
+        int b = (g * group_size) / QK_TURBO2;
+        float norm = GGML_FP16_TO_FP32(x[b].norm);
+        
+        int n_copy = group_size;
+        if ((g + 1) * group_size > k) {
+            n_copy = k - g * group_size;
+        }
+        for (int j = 0; j < n_copy; j++) {
+            y[g * group_size + j] = buf[j] * norm;
         }
     }
 }
@@ -619,39 +601,48 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
 }
 
 void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    turbo_init_rotation();
-
-    assert(k % QK_TURBO4 == 0);
-    const int nb = k / QK_TURBO4;
-    const int d  = QK_TURBO4;
+    const int d = QK_TURBO4;
+    const int n_blocks = (int)((k + d - 1) / d);
 
 #if TURBO4_USE_4BIT
-    /* 4-bit PolarQuant: nibble unpack → centroid → inverse rotate → scale */
-    /* TODO: add proper 4-bit centroid table to C code (currently only in Metal) */
     static const float CENTROIDS_4BIT[16] = {
         -0.173926f, -0.117195f, -0.089527f, -0.068756f,
         -0.051262f, -0.035597f, -0.020989f, -0.006938f,
          0.006938f,  0.020989f,  0.035597f,  0.051262f,
          0.068756f,  0.089527f,  0.117195f,  0.173926f
     };
-    for (int block = 0; block < nb; block++) {
+    for (int block = 0; block < n_blocks; block++) {
         float norm = GGML_FP16_TO_FP32(x[block].norm);
-        float rotated[QK_TURBO4];
+        float rotated[128];
         for (int i = 0; i < d; i++) {
             uint8_t idx = (x[block].qs[i / 2] >> ((i % 2) * 4)) & 0xF;
             rotated[i] = CENTROIDS_4BIT[idx];
         }
-        float * dst = y + block * d;
-        matvec(turbo_rotation_t, rotated, dst, d);
-        for (int i = 0; i < d; i++) dst[i] *= norm;
+
+        int n_copy = d;
+        if ((block + 1) * d > k) {
+            n_copy = k - block * d;
+        }
+
+        if (n_copy == d) {
+            float * dst = y + block * d;
+            for (int i = 0; i < d; i++) {
+                dst[i] = rotated[i] * norm;
+            }
+        } else {
+            float * dst = y + block * d;
+            for (int i = 0; i < n_copy; i++) {
+                dst[i] = rotated[i] * norm;
+            }
+        }
     }
 #else
     /* Legacy 3-bit + QJL dequant */
     turbo_init_qjl();
-    for (int block = 0; block < nb; block++) {
+    for (int block = 0; block < n_blocks; block++) {
         float norm  = GGML_FP16_TO_FP32(x[block].norm);
 
-        uint8_t indices[TURBO_D];
+        uint8_t indices[128];
         for (int i = 0; i < d; i++) {
             int bit_offset = i * 3;
             int byte_idx   = bit_offset / 8;
@@ -663,7 +654,7 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
             indices[i] = (uint8_t)((raw >> bit_pos) & 0x7);
         }
 
-        float signs[TURBO_D];
+        float signs[128];
         for (int i = 0; i < d; i++) {
             signs[i] = (x[block].signs[i / 8] & (1 << (i % 8))) ? 1.0f : -1.0f;
         }
@@ -671,22 +662,34 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
         const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
 
-        float rotated_recon[TURBO_D];
+        float rotated_recon[128];
         for (int i = 0; i < d; i++) {
             rotated_recon[i] = CENTROIDS_3BIT[indices[i]];
         }
-        float mse_recon[TURBO_D];
+        float mse_recon[128];
         matvec(turbo_rotation_t, rotated_recon, mse_recon, d);
 
-        float qjl_recon[TURBO_D];
+        float qjl_recon[128];
         matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
         for (int i = 0; i < d; i++) {
             qjl_recon[i] *= qjl_scale;
         }
 
-        float * dst = y + block * d;
-        for (int i = 0; i < d; i++) {
-            dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
+        int n_copy = d;
+        if ((block + 1) * d > k) {
+            n_copy = k - block * d;
+        }
+
+        if (n_copy == d) {
+            float * dst = y + block * d;
+            for (int i = 0; i < d; i++) {
+                dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
+            }
+        } else {
+            float * dst = y + block * d;
+            for (int i = 0; i < n_copy; i++) {
+                dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
+            }
         }
     }
 #endif
@@ -707,3 +710,13 @@ size_t quantize_turbo4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT d
     }
     return nrows * row_size;
 }
+
+void turbo_cpu_iwht_exported(float * x, int group_size) {
+    turbo_cpu_iwht(x, group_size);
+}
+
+void turbo_cpu_de_rotate_turbo4(const float * x, float * y, int d) {
+    turbo_init_rotation();
+    matvec(turbo_rotation_t, x, y, d);
+}
+
