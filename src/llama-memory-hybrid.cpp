@@ -29,7 +29,10 @@ llama_memory_hybrid::llama_memory_hybrid(
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
-    const layer_filter_cb & filter_recr) :
+    const layer_filter_cb & filter_recr,
+                     bool   swa_split,
+                     bool   swa_full,
+                 uint32_t   n_ubatch) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
@@ -101,22 +104,21 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
             break;
         }
 
-        // prepare the recurrent batches first
-        if (!mem_recr->prepare(ubatches)) {
-            // TODO: will the recurrent cache be in an undefined context at this point?
-            LLAMA_LOG_ERROR("%s: failed to prepare recurrent ubatches\n", __func__);
-            return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
-        }
-
-        // prepare the attention cache
-        auto heads_attn = mem_attn->prepare(ubatches);
-        if (heads_attn.empty()) {
+        // prepare the caches
+        auto ctx_attn = mem_attn->init_batch(balloc, n_ubatch, embd_all);
+        if (llama_memory_status_is_fail(ctx_attn->get_status())) {
             LLAMA_LOG_ERROR("%s: failed to prepare attention ubatches\n", __func__);
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
+        auto ctx_recr = mem_recr->init_batch(balloc, n_ubatch, embd_all);
+        if (llama_memory_status_is_fail(ctx_recr->get_status())) {
+            LLAMA_LOG_ERROR("%s: failed to prepare recurrent ubatches\n", __func__);
+            return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        }
+
         return std::make_unique<llama_memory_hybrid_context>(
-                this, std::move(heads_attn), std::move(ubatches));
+                this, std::move(ctx_attn), std::move(ctx_recr), std::move(ubatches));
     } while(false);
 
     return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
@@ -228,13 +230,13 @@ llama_memory_hybrid_context::llama_memory_hybrid_context(
 
 llama_memory_hybrid_context::llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
-                  slot_info_vec_t   sinfos_attn,
+         llama_memory_context_ptr   ctx_attn,
+         llama_memory_context_ptr   ctx_recr,
         std::vector<llama_ubatch>   ubatches) :
     ubatches(std::move(ubatches)),
-    // note: here we copy the ubatches. not sure if this is ideal
-    ctx_attn(new llama_kv_cache_context(mem->get_mem_attn(), std::move(sinfos_attn), this->ubatches)),
-    ctx_recr(new llama_memory_recurrent_context(mem->get_mem_recr(), this->ubatches)),
-    status(llama_memory_status_combine(ctx_attn->get_status(), ctx_recr->get_status())) {
+    ctx_attn(std::move(ctx_attn)),
+    ctx_recr(std::move(ctx_recr)),
+    status(llama_memory_status_combine(this->ctx_attn->get_status(), this->ctx_recr->get_status())) {
 }
 
 bool llama_memory_hybrid_context::next() {
@@ -276,4 +278,16 @@ const llama_kv_cache_context * llama_memory_hybrid_context::get_attn() const {
 
 const llama_memory_recurrent_context * llama_memory_hybrid_context::get_recr() const {
     return static_cast<const llama_memory_recurrent_context *>(ctx_recr.get());
+}
+
+ggml_tensor * llama_memory_hybrid_context::get_turbo_rot_forward() const {
+    return get_attn()->get_turbo_rot_forward();
+}
+
+ggml_tensor * llama_memory_hybrid_context::get_turbo_rot_inverse() const {
+    return get_attn()->get_turbo_rot_inverse();
+}
+
+ggml_tensor * llama_memory_hybrid_context::get_turbo_innerq_scale_inv() const {
+    return get_attn()->get_turbo_innerq_scale_inv();
 }

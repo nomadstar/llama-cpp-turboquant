@@ -4,6 +4,8 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-triattention.h"
+#include "turbo-rotation-data.h"
 
 #include <algorithm>
 #include <cassert>
@@ -370,6 +372,51 @@ llama_kv_cache::llama_kv_cache(
 
             ggml_gen_hadamard(tmp);
         }
+    }
+
+    // TurboQuant: initialize rotation matrices and InnerQ scale_inv when the cache uses turbo types
+    const bool turbo_quant_k = (type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0);
+    const bool turbo_quant_v = (type_v == GGML_TYPE_TURBO2_0 || type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0);
+
+    if (turbo_quant_k || turbo_quant_v) {
+        const int64_t head_dim = std::max(n_embd_head_k_all, n_embd_head_v_all);
+
+        ggml_init_params params = {
+            /* .mem_size   = */ 4*ggml_tensor_overhead() + 2*128*128*sizeof(float) + 128*sizeof(float),
+            /* .mem_buffer = */ nullptr,
+            /* .no_alloc   = */ false,
+        };
+
+        ggml_context_ptr ctx { ggml_init(params) };
+
+        const int64_t rot_size = (head_dim == 32) ? 32 : 128;
+        const float * rot_data = (head_dim == 32)
+            ? nullptr  // TODO: TURBO_ROTATION_32_RT when available
+            : TURBO_ROTATION_RT;
+
+        if (rot_data && turbo_quant_k) {
+            turbo_rotation = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, rot_size, rot_size);
+            memcpy(turbo_rotation->data, rot_data, rot_size*rot_size*sizeof(float));
+            ggml_format_name(turbo_rotation, "turbo_rot_fwd");
+        }
+
+        if (rot_data && turbo_quant_v) {
+            turbo_rotation_inv = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, rot_size, rot_size);
+            memcpy(turbo_rotation_inv->data, rot_data, rot_size*rot_size*sizeof(float));
+            ggml_format_name(turbo_rotation_inv, "turbo_rot_inv");
+        }
+
+        // InnerQ: per-channel scale_inv for Q/V equalization
+        // Allocate as 1D tensor with rot_size floats, initialized to 1.0
+        turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, rot_size);
+        for (int i = 0; i < rot_size; ++i) {
+            ((float *) turbo_innerq_scale_inv->data)[i] = 1.0f;
+        }
+        ggml_format_name(turbo_innerq_scale_inv, "turbo_innerq_scale_inv");
+
+        // keep the context alive with a minimal CPU buffer
+        auto * turbo_buf = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), 0);
+        ctxs_bufs.emplace_back(std::move(ctx), turbo_buf);
     }
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
@@ -1210,6 +1257,101 @@ bool llama_kv_cache::get_has_shift() const {
     }
 
     return result;
+}
+
+//
+// PagedAttention / Block Allocator
+//
+
+void llama_kv_cache::block_allocator_init(uint32_t total_tokens, uint32_t block_size) {
+    pa_block_size     = block_size;
+    pa_total_blocks   = (total_tokens + block_size - 1) / block_size;
+    pa_free_blocks.clear();
+    pa_free_blocks.reserve(pa_total_blocks);
+    for (uint32_t i = 0; i < pa_total_blocks; ++i) {
+        pa_free_blocks.push_back(i);
+    }
+    pa_block_tables.clear();
+    pa_global_block_table.assign(pa_total_blocks, -1);
+}
+
+int32_t llama_kv_cache::block_allocate() {
+    if (pa_free_blocks.empty()) {
+        return -1;
+    }
+    const int32_t block_id = (int32_t) pa_free_blocks.back();
+    pa_free_blocks.pop_back();
+    return block_id;
+}
+
+void llama_kv_cache::block_free(uint32_t block_id) {
+    if (block_id < pa_total_blocks) {
+        pa_free_blocks.push_back(block_id);
+    }
+}
+
+const std::vector<uint32_t> & llama_kv_cache::get_block_table(llama_seq_id seq_id) const {
+    static const std::vector<uint32_t> empty;
+    auto it = pa_block_tables.find(seq_id);
+    if (it != pa_block_tables.end()) {
+        return it->second;
+    }
+    return empty;
+}
+
+//
+// TriAttention hooks
+//
+
+void llama_kv_cache::init_triattention(const char * stats_path, const triattention_config * cfg) {
+    if (triattention_st) {
+        triattention_free(triattention_st);
+        triattention_st = nullptr;
+    }
+
+    triattention_st = triattention_init(
+        stats_path,
+        cfg,
+        get_size(),
+        0.0,  // rope_theta = 0 disables frequency validation
+        hparams.n_embd_head_k(0),
+        hparams.n_head_kv(0));
+
+    if (triattention_st) {
+        LLAMA_LOG_INFO("%s: TriAttention initialized (budget=%u, divide_length=%u)\n",
+            __func__, cfg->budget, cfg->divide_length);
+    }
+}
+
+int32_t llama_kv_cache::triattention_try_prune() {
+    if (!triattention_st) {
+        return -1;
+    }
+
+    const uint32_t n_used = v_cells[0].get_used();
+    if (!triattention_should_prune(triattention_st, n_used)) {
+        return 0;
+    }
+
+    const uint32_t n_layer = (uint32_t) layers.size();
+    std::vector<ggml_tensor *> k_tensors(n_layer);
+    std::vector<int32_t> layer_map_arr(n_layer);
+
+    for (uint32_t i = 0; i < n_layer; ++i) {
+        k_tensors[i]    = layers[i].k;
+        layer_map_arr[i] = (int32_t) layers[i].il;
+    }
+
+    return triattention_prune_impl(
+        triattention_st,
+        k_tensors.data(),
+        n_layer,
+        layer_map_arr.data(),
+        get_size());
+}
+
+bool llama_kv_cache::has_triattention() const {
+    return triattention_st != nullptr;
 }
 
 ggml_type llama_kv_cache::type_k() const {
@@ -2629,4 +2771,47 @@ void llama_kv_cache_context::set_input_k_rot(ggml_tensor * dst) const {
 
 void llama_kv_cache_context::set_input_v_rot(ggml_tensor * dst) const {
     kv->set_input_v_rot(dst);
+}
+
+//
+// TurboQuant accessors
+//
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {
+    return kv->get_turbo_rotation();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rotation_inv() const {
+    return kv->get_turbo_rotation_inv();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
+    return kv->get_turbo_rotation();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
+    return kv->get_turbo_rotation_inv();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
+    return kv->get_turbo_innerq_scale_inv();
+}
+
+void llama_kv_cache_context::set_input_block_table(ggml_tensor * dst) const {
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+
+    int32_t * data = (int32_t *) dst->data;
+    const int64_t n_tokens = dst->ne[0];
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const uint32_t seq_id = sinfos[i_cur].strm[0]; // simplified: use first stream
+        (void)seq_id;
+
+        const auto & block_table = kv->get_block_table(seq_id);
+        if (i < (int64_t) block_table.size()) {
+            data[i] = (int32_t) block_table[i];
+        } else {
+            data[i] = -1;
+        }
+    }
 }

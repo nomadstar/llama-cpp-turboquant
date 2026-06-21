@@ -495,6 +495,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     if (self_v_rot) {
         mctx->set_input_v_rot(self_v_rot);
     }
+
+    if (block_table && block_table->buffer) {
+        mctx->set_input_block_table(block_table);
+    }
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -516,6 +520,10 @@ void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    if (block_table && block_table->buffer) {
+        mctx->set_input_block_table(block_table);
+    }
 }
 
 bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
@@ -596,6 +604,10 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
 
     if (self_v_rot_swa) {
         mctx->get_swa()->set_input_v_rot(self_v_rot_swa);
+    }
+
+    if (block_table && block_table->buffer) {
+        mctx->get_base()->set_input_block_table(block_table);
     }
 }
 
@@ -2071,6 +2083,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * kq_mask,
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
+         ggml_tensor * block_table,
+               uint32_t block_size,
                float   kq_scale,
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
@@ -2104,11 +2118,22 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f,
+                                  block_table, (int)block_size);
         cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
+
+        // TurboQuant: apply inverse WHT rotation to undo Q-domain rotation in the attention output
+        if (block_table) {
+            const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+            ggml_tensor * turbo_rot_inv = mctx_cur->get_turbo_rotation_inv();
+            if (turbo_rot_inv) {
+                cur = ggml_mul_mat_aux(ctx0, cur, turbo_rot_inv);
+                cb(cur, "fattn_wht_inv", il);
+            }
+        }
 
         if (v_mla) {
 #if 0
@@ -2257,7 +2282,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, nullptr, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2296,6 +2321,12 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 
     inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
     inp->self_v_rot = mctx_cur->build_input_v_rot(ctx0);
+
+    if (mctx_cur->get_kv()->pa_total_blocks > 0) {
+        inp->block_table = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_kv()->pa_total_blocks);
+        ggml_set_input(inp->block_table);
+        ggml_set_name(inp->block_table, "block_table");
+    }
 
     return inp;
 }
@@ -2356,7 +2387,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, inp->block_table, inp->mctx->get_kv()->pa_block_size, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {
@@ -2399,6 +2430,12 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
+    }
+
+    if (mctx_cur->get_kv()->pa_total_blocks > 0) {
+        inp->block_table = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_kv()->pa_total_blocks);
+        ggml_set_input(inp->block_table);
+        ggml_set_name(inp->block_table, "block_table");
     }
 
     return inp;
@@ -2447,7 +2484,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, inp->block_table, inp->mctx->get_kv()->pa_block_size, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2532,7 +2569,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, nullptr, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2611,7 +2648,13 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = nullptr;
+    {
+        // PagedAttention: pass block_table only for the base (non-SWA) cache
+        ggml_tensor * bt = is_swa ? nullptr : inp->block_table;
+        uint32_t bs = bt ? mctx_cur->get_kv()->pa_block_size : 0;
+        cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, bt, bs, kq_scale, il);
+    }
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
@@ -2674,7 +2717,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, nullptr, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2751,6 +2794,12 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
     inp->self_k_rot_swa = mctx_cur->get_swa()->build_input_k_rot(ctx0);
     inp->self_v_rot_swa = mctx_cur->get_swa()->build_input_v_rot(ctx0);
+
+    if (mctx_cur->get_base()->get_kv()->pa_total_blocks > 0) {
+        inp->block_table = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_base()->get_kv()->pa_total_blocks);
+        ggml_set_input(inp->block_table);
+        ggml_set_name(inp->block_table, "block_table");
+    }
 
     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
 }

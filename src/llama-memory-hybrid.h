@@ -39,7 +39,10 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                     bool   swa_split = false,
+                     bool   swa_full = false,
+                 uint32_t   n_ubatch = 0);
 
     ~llama_memory_hybrid() = default;
 
@@ -109,7 +112,8 @@ public:
     // init success
     llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
-                  slot_info_vec_t   sinfos_attn,
+         llama_memory_context_ptr   ctx_attn,
+         llama_memory_context_ptr   ctx_recr,
         std::vector<llama_ubatch>   ubatches);
 
     ~llama_memory_hybrid_context() = default;
@@ -126,6 +130,11 @@ public:
 
     const llama_kv_cache_context * get_attn() const;
     const llama_memory_recurrent_context * get_recr() const;
+
+    // TurboQuant: delegate to the KV cache context
+    ggml_tensor * get_turbo_rot_forward() const override;
+    ggml_tensor * get_turbo_rot_inverse() const override;
+    ggml_tensor * get_turbo_innerq_scale_inv() const override;
 
 private:
     // the index of the next ubatch to process

@@ -12,12 +12,15 @@ struct llama_cparams;
 struct llama_hparams;
 struct llama_model;
 struct llama_context;
+struct triattention_state;
+struct triattention_config;
 
 //
 // llama_kv_cache
 //
 
 class llama_kv_cache : public llama_memory_i {
+    friend class llama_kv_cache_context;
 public:
     struct stream_copy_info {
         bool empty() const {
@@ -171,9 +174,35 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
+    // TurboQuant: get rotation matrices (stored as row-major C arrays)
+    // turbo_rotation = R (forward rotation, for Q pre-rotate-queries)
+    // turbo_rotation_inv = R^T = R^{-1} (inverse rotation, for V output un-rotation)
+    ggml_tensor * get_turbo_rotation() const { return turbo_rotation; }
+    ggml_tensor * get_turbo_rotation_inv() const { return turbo_rotation_inv; }
+
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
+    ggml_tensor * get_turbo_innerq_scale_inv() const { return turbo_innerq_scale_inv; }
+
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
+
+    //
+    // PagedAttention / Block Allocator API
+    //
+
+    void block_allocator_init(uint32_t total_tokens, uint32_t block_size);
+    int32_t block_allocate();
+    void block_free(uint32_t block_id);
+    const std::vector<uint32_t> & get_block_table(llama_seq_id seq_id) const;
+
+    //
+    // TriAttention KV cache eviction
+    //
+
+    void init_triattention(const char * stats_path, const triattention_config * cfg);
+    int32_t triattention_try_prune();
+    bool has_triattention() const;
 
     //
     // preparation API
@@ -214,6 +243,25 @@ public:
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
 
+    llama_kv_cache * get_base() const;
+    llama_kv_cache * get_swa() const;
+
+    struct cell_ranges_t {
+        uint32_t strm;
+
+        std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
+    };
+
+    //
+    // state API
+    //
+
+    void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
+    void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
+
+    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
+    bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
@@ -234,6 +282,15 @@ private:
 
     const uint32_t n_seq_max = 1;
     const uint32_t n_stream  = 1;
+
+    // PagedAttention Internal State
+public:
+    uint32_t pa_block_size = 16;
+    uint32_t pa_total_blocks = 0;
+    std::vector<uint32_t> pa_free_blocks;
+    std::unordered_map<llama_seq_id, std::vector<uint32_t>> pa_block_tables;
+    std::vector<int32_t> pa_global_block_table;
+private:
 
     // required padding
     const uint32_t n_pad = 1;
@@ -281,8 +338,18 @@ private:
 
     std::vector<kv_layer> layers;
 
+    // TurboQuant rotation matrices (128x128, row-major stored)
+    ggml_tensor * turbo_rotation = nullptr;      // R (forward rotation)
+    ggml_tensor * turbo_rotation_inv = nullptr;   // R^T = R^{-1} (inverse rotation)
+
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization (128 floats)
+    ggml_tensor * turbo_innerq_scale_inv = nullptr;
+
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    // TriAttention eviction state (nullptr if not enabled)
+    triattention_state * triattention_st = nullptr;
 
     size_t total_size() const;
 
@@ -304,17 +371,9 @@ private:
                llm_graph_result * res,
                   llama_context * lctx) const;
 
-    struct cell_ranges_t {
-        uint32_t strm;
-
-        std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
-    };
-
-    void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
-    void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
-
-    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
-    bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+    bool is_split = false;
+    std::unique_ptr<llama_kv_cache> kv_base;
+    std::unique_ptr<llama_kv_cache> kv_swa;
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {
@@ -337,11 +396,27 @@ public:
             bool do_shift,
             stream_copy_info sc_info);
 
+    // used to create an update context when is_split is true
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            llama_context * lctx,
+            bool optimize);
+
     // used to create a batch processing context from a batch
     llama_kv_cache_context(
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
+
+    // used to create a split batch processing context
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            slot_info_vec_t sinfos_base,
+            slot_info_vec_t sinfos_swa,
+            std::vector<llama_ubatch> ubatches);
+
+    const llama_kv_cache_context * get_base() const;
+    const llama_kv_cache_context * get_swa()  const;
 
     virtual ~llama_kv_cache_context();
 
@@ -396,6 +471,20 @@ public:
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
 
+    // TurboQuant rotation accessors
+    ggml_tensor * get_turbo_rotation() const;
+    ggml_tensor * get_turbo_rotation_inv() const;
+
+    ggml_tensor * get_turbo_rot_forward() const override;
+    ggml_tensor * get_turbo_rot_inverse() const override;
+
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
+    ggml_tensor * get_turbo_innerq_scale_inv() const override;
+
+    void set_input_block_table(ggml_tensor * dst) const;
+
+    const llama_kv_cache * get_kv() const { return kv; }
+
 private:
     llama_memory_status status;
 
@@ -428,4 +517,9 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    bool is_split = false;
+    const llama_memory_context_ptr ctx_base = nullptr;
+    const llama_memory_context_ptr ctx_swa = nullptr;
+    size_t i_next = 0;
 };
