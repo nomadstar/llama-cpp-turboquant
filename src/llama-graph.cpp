@@ -2117,6 +2117,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
+    printf("DEBUG: n_embd_head_k=%d, n_head_kv=%d, n_head=%d, gqa_ratio=%d\n", hparams.n_embd_head_k(il), hparams.n_head_kv(il), hparams.n_head(il), hparams.n_head(il) / hparams.n_head_kv(il));
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f,
                                   block_table, (int)block_size);
