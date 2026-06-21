@@ -19,6 +19,27 @@
 // The macro on the following line shifts it by a factor of 2**3=8, as was needed to fix https://github.com/ggml-org/llama.cpp/issues/18606 .
 #define FATTN_KQ_MAX_OFFSET (3.0f*0.6931f)
 
+static __device__ __forceinline__ int64_t get_physical_token_idx(
+    const char * block_table_ptr, 
+    int64_t logical_idx, 
+    int32_t block_size,
+    int sequence,
+    int32_t ne11) 
+{
+    if (!block_table_ptr) {
+        return logical_idx;
+    }
+    const int32_t * block_table = (const int32_t *) block_table_ptr;
+    const int max_blocks = (ne11 + block_size - 1) / block_size;
+    const int block_idx = logical_idx / block_size;
+    const int table_offset = sequence * max_blocks + block_idx;
+    const int physical_block = block_table[table_offset];
+    if (physical_block < 0) {
+        return logical_idx;
+    }
+    return physical_block * block_size + (logical_idx % block_size);
+}
+
 typedef void (* fattn_kernel_t)(
         const char * __restrict__ Q,
         const char * __restrict__ K,

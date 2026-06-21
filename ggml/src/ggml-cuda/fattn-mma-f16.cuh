@@ -362,7 +362,8 @@ static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages(const int DKQ, c
 
 template<int stride_tile, int nwarps, int nbatch_fa, bool use_cp_async, bool oob_check>
 static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
-        const half2 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int D2, const int stride_KV, const int i_sup) {
+        const half2 * const __restrict__ KV_base, half2 * const __restrict__ tile_KV, const int D2, const int stride_KV, const int i_sup,
+        const char * block_table, const int k_VKQ_0, const int block_size, const int sequence, const int ne11) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     // K/V data is loaded with decreasing granularity for D for better memory bandwidth.
     // The minimum granularity is 16 bytes.
@@ -396,8 +397,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
-
-                    cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV + i*stride_KV + k*h2_per_chunk);
+                    int64_t physical_i = get_physical_token_idx(block_table, k_VKQ_0 + i, block_size, sequence, ne11);
+                    cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV_base + physical_i*stride_KV + k*h2_per_chunk);
                 }
             }
         };
@@ -431,9 +432,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
-
+                    int64_t physical_i = get_physical_token_idx(block_table, k_VKQ_0 + i, block_size, sequence, ne11);
                     ggml_cuda_memcpy_1<16>(tile_KV + i*stride_tile + k*4,
-                        !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                        !oob_check || i < i_sup ? KV_base + physical_i*stride_KV + k*h2_per_chunk : zero);
                 }
             }
         };
@@ -555,7 +556,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         float        * const __restrict__ KQ_rowsum,
         const int jt,
         const int kb0,
-        const int k_VKQ_sup) {
+        const int k_VKQ_sup,
+        const char * block_table,
+        const int block_size,
+        const int sequence,
+        const int ne11) {
 #if defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
     constexpr int  warp_size       = ggml_cuda_get_physical_warp_size();
     constexpr int  ncols           = ncols1 * ncols2;
@@ -589,7 +594,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         cp_async_wait_all();
         __syncthreads();
         flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check>
-            (V_h2 + int64_t(k_VKQ_0)*stride_V, tile_V, nbatch_V2, stride_V, k_VKQ_sup);
+            (V_h2, tile_V, nbatch_V2, stride_V, k_VKQ_sup, block_table, k_VKQ_0, block_size, sequence, ne11);
     } else {
         constexpr bool use_cp_async = nstages == 1;
         if (ncols2 > 1 || mask_h) {
@@ -608,7 +613,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             const int k0_diff = k0_stop - k0_start;
             constexpr bool use_cp_async = nstages == 1;
             flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check>
-                (K_h2 + int64_t(k_VKQ_0)*stride_K + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup);
+                (K_h2 + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, block_table, k_VKQ_0, block_size, sequence, ne11);
             if (use_cp_async) {
                 cp_async_wait_all();
             }
@@ -944,7 +949,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     (mask_h + k_VKQ_0 + nbatch_fa, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01);
             }
             flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check>
-                (K_h2 + int64_t(k_VKQ_0 + nbatch_fa)*stride_K, tile_K, nbatch_K2, stride_K, k_VKQ_sup);
+                (K_h2, tile_K, nbatch_K2, stride_K, k_VKQ_sup, block_table, k_VKQ_0 + nbatch_fa, block_size, sequence, ne11);
         }
     }
 
@@ -1266,7 +1271,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                 (mask_h + kb0*nbatch_fa, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01);
         }
         flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check>
-            (K_h2 + int64_t(kb0)*nbatch_fa*stride_K, tile_K, nbatch_K2, stride_K, k_VKQ_sup);
+            (K_h2, tile_K, nbatch_K2, stride_K, k_VKQ_sup, block_table, kb0*nbatch_fa, block_size, sequence, ne11);
     }
 
     // kb0_start is always < kb0_stop so the last iter can be executed unconditionally.
