@@ -4148,3 +4148,4 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
     //     [](common_params &) { /* unused */ }
     // ).set_preset_only());
 }
+
