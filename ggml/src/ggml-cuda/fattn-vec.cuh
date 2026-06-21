@@ -284,8 +284,7 @@ static __global__ void flash_attn_ext_vec(
 
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
-                int64_t physical_k = get_physical_token_idx(block_table, k_VKQ_0 + i_KQ, block_size, sequence, ne11);
-                float sum = vec_dot_KQ(K_ptr + nb13*sequence + nb12*(head / gqa_ratio) + physical_k*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                float sum = vec_dot_KQ(K_ptr + nb13*sequence + nb12*(head / gqa_ratio) + (k_VKQ_0 + i_KQ)*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
                 sum = warp_reduce_sum<nthreads_KQ>(sum);
 
                 if (use_logit_softcap) {
@@ -362,16 +361,14 @@ static __global__ void flash_attn_ext_vec(
                 half2 tmp[V_rows_per_thread/2];
                 if constexpr (type_V == GGML_TYPE_BF16) {
                     float2 tmp_f[V_rows_per_thread/2];
-                    int64_t physical_v = get_physical_token_idx(block_table, k_VKQ_0 + k, block_size, sequence, ne11);
-                    dequantize_V(V_ptr + nb23*sequence + nb22*(head / gqa_ratio) + physical_v*nb21, tmp_f,
+                    dequantize_V(V_ptr + nb23*sequence + nb22*(head / gqa_ratio) + (k_VKQ_0 + k)*nb21, tmp_f,
                         2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
 #pragma unroll
                     for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
                         tmp[i_VKQ_1] = __float22half2_rn(tmp_f[i_VKQ_1]);
                     }
                 } else {
-                    int64_t physical_v = get_physical_token_idx(block_table, k_VKQ_0 + k, block_size, sequence, ne11);
-                    dequantize_V(V_ptr + nb23*sequence + nb22*(head / gqa_ratio) + physical_v*nb21, tmp,
+                    dequantize_V(V_ptr + nb23*sequence + nb22*(head / gqa_ratio) + (k_VKQ_0 + k)*nb21, tmp,
                         2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
                 }
 #pragma unroll
@@ -402,8 +399,7 @@ static __global__ void flash_attn_ext_vec(
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
                 float2 tmp[V_rows_per_thread/2];
-                int64_t physical_v = get_physical_token_idx(block_table, k_VKQ_0 + k, block_size, sequence, ne11);
-                    dequantize_V(V_ptr + nb23*sequence + nb22*(head / gqa_ratio) + physical_v*nb21, tmp,
+                dequantize_V(V_ptr + nb23*sequence + nb22*(head / gqa_ratio) + (k_VKQ_0 + k)*nb21, tmp,
                     2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
 #pragma unroll
                 for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {

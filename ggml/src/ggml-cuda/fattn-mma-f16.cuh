@@ -422,8 +422,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
-                    int64_t physical_i = get_physical_token_idx(block_table, k_VKQ_0 + i, block_size, sequence, ne11);
-                    cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV_base + physical_i*stride_KV + k*h2_per_chunk);
+                    cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV_base + (k_VKQ_0 + i)*stride_KV + k*h2_per_chunk);
                 }
             }
         };
@@ -457,9 +456,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
-                    int64_t physical_i = get_physical_token_idx(block_table, k_VKQ_0 + i, block_size, sequence, ne11);
                     ggml_cuda_memcpy_1<16>(tile_KV + i*stride_tile + k*4,
-                        !oob_check || i < i_sup ? KV_base + physical_i*stride_KV + k*h2_per_chunk : zero);
+                        !oob_check || i < i_sup ? KV_base + (k_VKQ_0 + i)*stride_KV + k*h2_per_chunk : zero);
                 }
             }
         };
