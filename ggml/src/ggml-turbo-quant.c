@@ -288,7 +288,8 @@ void quantize_row_turbo3_0_ref(const float * GGML_RESTRICT x, block_turbo3_0 * G
 
         // 1. L2 norm over the group
         float norm_sq = 0.0f;
-        float buf[128];  // max group_size
+        GGML_ASSERT(group_size <= 256);
+        float buf[256];  // max group_size
         for (int j = 0; j < group_size; j++) {
             buf[j] = grp_src[j];
             norm_sq += buf[j] * buf[j];
@@ -339,7 +340,8 @@ void dequantize_row_turbo3_0(const block_turbo3_0 * GGML_RESTRICT x, float * GGM
 
     const int n_groups = (int)((k + group_size - 1) / group_size);
     for (int g = 0; g < n_groups; g++) {
-        float buf[128];
+        GGML_ASSERT(group_size <= 256);
+        float buf[256];
         for (int j = 0; j < group_size; j++) {
             int global_idx = g * group_size + j;
             int b = global_idx / QK_TURBO3;
@@ -402,7 +404,8 @@ void quantize_row_turbo2_0_ref(const float * GGML_RESTRICT x, block_turbo2_0 * G
 
         /* 1. L2 norm over the group */
         float norm_sq = 0.0f;
-        float buf[128];
+        GGML_ASSERT(group_size <= 256);
+        float buf[256];
         for (int j = 0; j < group_size; j++) {
             buf[j] = grp_src[j];
             norm_sq += buf[j] * buf[j];
@@ -449,7 +452,8 @@ void dequantize_row_turbo2_0(const block_turbo2_0 * GGML_RESTRICT x, float * GGM
 
     const int n_groups = (int)((k + group_size - 1) / group_size);
     for (int g = 0; g < n_groups; g++) {
-        float buf[128];
+        GGML_ASSERT(group_size <= 256);
+        float buf[256];
         for (int j = 0; j < group_size; j++) {
             int global_idx = g * group_size + j;
             int b = global_idx / QK_TURBO2;
