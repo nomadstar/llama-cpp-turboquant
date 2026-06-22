@@ -419,3 +419,82 @@ static __device__ __forceinline__ float turbo2_dequant_element(
     uint8_t idx = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
     return TURBO_CENTROIDS_2BIT[idx] * norm;
 }
+
+// ---- Full-pipeline quantize for turbo3 block (L2 norm + WHT + centroids + scale) ----
+// Used by set_rows CUDA kernel. Matches CPU quantize_row_turbo3_0_ref.
+
+static __device__ void quantize_f32_turbo3_row(const float * __restrict__ src,
+                                                 block_turbo3_0 * __restrict__ dst) {
+    float buf[QK_TURBO3];
+
+    // 1. Compute L2 norm and copy to local buffer
+    float norm_sq = 0.0f;
+    for (int j = 0; j < QK_TURBO3; j++) {
+        buf[j] = src[j];
+        norm_sq += src[j] * src[j];
+    }
+    float grp_norm = sqrtf(norm_sq);
+    float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+    // 2. Normalize
+    for (int j = 0; j < QK_TURBO3; j++) {
+        buf[j] *= inv_norm;
+    }
+
+    // 3. Forward WHT rotation (signs1 -> FWHT -> 1/sqrt(128) -> signs2)
+    turbo_rotate_forward(buf);
+
+    // 4. Quantize + pack
+    memset(dst->qs, 0, QK_TURBO3 / 4);
+    memset(dst->signs, 0, QK_TURBO3 / 8);
+
+    float recon_sq = 0.0f;
+    for (int j = 0; j < QK_TURBO3; j++) {
+        uint8_t idx = turbo_nearest_centroid_3bit(buf[j]);
+        dst->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+        if (idx & 0x4) {
+            dst->signs[j / 8] |= (1 << (j % 8));
+        }
+        recon_sq += TURBO_CENTROIDS_3BIT[idx] * TURBO_CENTROIDS_3BIT[idx];
+    }
+
+    // 5. Corrected norm: grp_norm / recon_norm
+    float recon_norm = sqrtf(recon_sq);
+    float corrected = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+    dst->norm = __float2half(corrected);
+}
+
+// ---- Full-pipeline quantize for turbo2 block (L2 norm + WHT + centroids + scale) ----
+// Used by set_rows CUDA kernel. Matches CPU quantize_row_turbo2_0_ref.
+
+static __device__ void quantize_f32_turbo2_row(const float * __restrict__ src,
+                                                 block_turbo2_0 * __restrict__ dst) {
+    float buf[QK_TURBO2];
+
+    float norm_sq = 0.0f;
+    for (int j = 0; j < QK_TURBO2; j++) {
+        buf[j] = src[j];
+        norm_sq += src[j] * src[j];
+    }
+    float grp_norm = sqrtf(norm_sq);
+    float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+    for (int j = 0; j < QK_TURBO2; j++) {
+        buf[j] *= inv_norm;
+    }
+
+    turbo_rotate_forward(buf);
+
+    memset(dst->qs, 0, QK_TURBO2 / 4);
+
+    float recon_sq = 0.0f;
+    for (int j = 0; j < QK_TURBO2; j++) {
+        uint8_t idx = turbo_nearest_centroid_2bit(buf[j]);
+        dst->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+        recon_sq += TURBO_CENTROIDS_2BIT[idx] * TURBO_CENTROIDS_2BIT[idx];
+    }
+
+    float recon_norm = sqrtf(recon_sq);
+    float corrected = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+    dst->norm = __float2half(corrected);
+}
