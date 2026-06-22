@@ -11,7 +11,7 @@ A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) targeting 
 | Feature | Status | Notes |
 |---|---|---|
 | **TurboQuant+** | Partial | Works via `--cache-type-k/v turbo*`. Known bug: `sinks=1` + turbo3 + logit_softcap produces wrong results on CUDA. |
-| **TriAttention** | Pending | Engine implemented, not wired to CLI. Needs a per-model `.triattention` calibration file and a `--triattention-calib` flag. |
+| **TriAttention** | Active | CLI flags wired. Requires a per-model `.triattention` calibration file (see usage below). |
 | **PagedAttention** | Pending | Block allocator stub exists, not connected to the inference graph. |
 
 ### Lineage
@@ -165,11 +165,40 @@ The following activate based on the selected types — no flags required:
 
 See the linked papers above for parameter selection guidance on a per-model basis.
 
+## Usage
+
+### TriAttention KV cache eviction
+
+Based on [arXiv:2604.04921](https://arxiv.org/abs/2604.04921). Scores token importance using RoPE-inverted key vectors and evicts low-value positions to maintain a fixed memory budget. No attention weights needed — works alongside TurboQuant compression.
+
+**Step 1 — generate calibration file** (one-time per model, any coherent text up to ~32K tokens works):
+
+```bash
+llama-cli -m model.gguf --triattention-calibrate corpus.txt --triattention-calibrate-out model.triattention
+```
+
+**Step 2 — run with eviction:**
+
+```bash
+llama-cli -m model.gguf \
+  --triattention-stats model.triattention \
+  --triattention-budget 2048 \
+  --cache-type-k q8_0 --cache-type-v turbo3 \
+  -c 131072 -p "..."
+```
+
+Key flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--triattention-stats PATH` | — | Calibration file (required to enable) |
+| `--triattention-budget N` | 2048 | Max KV positions retained after pruning |
+| `--triattention-window N` | 128 | Pruning interval in decode tokens |
+| `--triattention-mode` | global | `global`, `per-kv-head`, `per-layer-head` |
+| `--triattention-no-protect-prefill` | — | Allow evicting prompt tokens |
+| `--triattention-log` | — | Print pruning events to stderr |
+
 ## Pending work
-
-### TriAttention
-
-Engine is implemented (`src/llama-triattention.cpp`) based on [arXiv:2604.04921](https://arxiv.org/abs/2604.04921) — RoPE-inverted key scoring, GPU scoring path, per-head calibration. Not yet wired to the CLI or server. To activate it requires: (1) a `--triattention-calib <file>.triattention` flag connected to `init_triattention()`, and (2) a calibration file generated for the specific model.
 
 ### PagedAttention
 
