@@ -69,13 +69,16 @@ static ggml_tensor * ggml_mul_mat_aux(
 
     ggml_tensor * res;
 
+    if (cur->type != GGML_TYPE_F32) {
+        cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+    }
+
     if (!ggml_is_contiguous(cur)) {
         res = ggml_cont_2d   (ctx, cur, n, ggml_nelements(cur)/n);
     } else {
         res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
     }
     res = ggml_mul_mat   (ctx, rot, res);
-    ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
     res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 
     return res;
@@ -2086,7 +2089,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * block_table,
                uint32_t block_size,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * turbo_rot_inv) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -2126,14 +2130,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
-        // TurboQuant: apply inverse WHT rotation to undo Q-domain rotation in the attention output
-        if (block_table) {
-            const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
-            ggml_tensor * turbo_rot_inv = mctx_cur->get_turbo_rotation_inv();
-            if (turbo_rot_inv) {
-                cur = ggml_mul_mat_aux(ctx0, cur, turbo_rot_inv);
-                cb(cur, "fattn_wht_inv", il);
+        if (turbo_rot_inv) {
+            if (cur->type != GGML_TYPE_F32) {
+                cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
             }
+            cur = ggml_mul_mat_aux(ctx0, cur, turbo_rot_inv);
+            cb(cur, "fattn_wht_inv", il);
         }
 
         if (v_mla) {
@@ -2155,7 +2157,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+        ggml_tensor * kq = ggml_mul_mat_aux(ctx0, k, q);
         cb(kq, "kq", il);
 
         // note: this op tends to require high floating point range
@@ -2199,16 +2201,19 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cb(v, "v_cont", il);
         }
 
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-        cb(kqv, "kqv", il);
+        cur = ggml_mul_mat_aux(ctx0, v, kq);
+        cb(cur, "kqv", il);
+
+        if (turbo_rot_inv) {
+            cur = ggml_mul_mat_aux(ctx0, cur, turbo_rot_inv);
+            cb(cur, "kqv_wht_inv", il);
+        }
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
         if (v_mla) {
-            kqv = ggml_mul_mat(ctx0, v_mla, kqv);
-            cb(kqv, "kqv_mla", il);
         }
 
-        cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+        cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
 
         // recombine streams
         cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
@@ -2283,7 +2288,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, nullptr, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, nullptr, 0, kq_scale, il, nullptr);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2364,14 +2369,27 @@ ggml_tensor * llm_graph_context::build_attn(
         v_cur = ggml_mul_mat_aux(ctx0, v_cur, inp->self_v_rot);
     }
 
+    const auto * mctx_cur = inp->mctx;
+
+    // TurboQuant: rotate Q into the WHT domain and scale by innerq_scale_inv
+    if (mctx_cur->get_turbo_rot_forward() != nullptr) {
+        ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
+        if (turbo_innerq_scale_inv) {
+            q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
+        }
+
+        ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
+        if (turbo_rot_fwd) {
+            q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
+        }
+    }
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
     ggml_build_forward_expand(gf, k_cur);
-
-    const auto * mctx_cur = inp->mctx;
 
     // store to KV cache
     {
@@ -2388,7 +2406,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, inp->block_table, inp->mctx->get_kv()->pa_block_size, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, inp->block_table, inp->mctx->get_kv()->pa_block_size, kq_scale, il, mctx_cur->get_turbo_rotation_inv());
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {
@@ -2463,14 +2481,27 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * v_mla,
             float     kq_scale,
             int       il) const {
+    const auto * mctx_cur = inp->mctx;
+
+    // TurboQuant: rotate Q into the WHT domain and scale by innerq_scale_inv
+    if (mctx_cur->get_turbo_rot_forward() != nullptr) {
+        ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
+        if (turbo_innerq_scale_inv) {
+            q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
+        }
+
+        ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
+        if (turbo_rot_fwd) {
+            q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
+        }
+    }
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
     ggml_build_forward_expand(gf, k_cur);
-
-    const auto * mctx_cur = inp->mctx;
 
     // store to KV cache
     {
@@ -2485,7 +2516,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, inp->block_table, inp->mctx->get_kv()->pa_block_size, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, inp->block_table, inp->mctx->get_kv()->pa_block_size, kq_scale, il, mctx_cur->get_turbo_rotation_inv());
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2522,14 +2553,27 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * top_k,
             float     kq_scale,
             int       il) const {
+    const auto * mctx_cur = inp->mctx->get_mla();
+
+    // TurboQuant: rotate Q into the WHT domain and scale by innerq_scale_inv
+    if (mctx_cur->get_turbo_rot_forward() != nullptr) {
+        ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
+        if (turbo_innerq_scale_inv) {
+            q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
+        }
+
+        ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
+        if (turbo_rot_fwd) {
+            q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
+        }
+    }
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
     ggml_build_forward_expand(gf, k_cur);
-
-    const auto * mctx_cur = inp->mctx->get_mla();
 
     // store to KV cache
     {
@@ -2570,7 +2614,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, nullptr, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, nullptr, 0, kq_scale, il, mctx_cur->get_turbo_rotation_inv());
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2618,7 +2662,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
     // TurboQuant: rotate Q into the WHT domain and scale by innerq_scale_inv
-    if (inp->block_table) {
+    if (mctx_cur->get_turbo_rot_forward() != nullptr) {
         ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
         if (turbo_innerq_scale_inv) {
             q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
@@ -2666,7 +2710,7 @@ ggml_tensor * llm_graph_context::build_attn(
         // PagedAttention: pass block_table only for the base (non-SWA) cache
         ggml_tensor * bt = is_swa ? nullptr : inp->block_table;
         uint32_t bs = bt ? mctx_cur->get_kv()->pa_block_size : 0;
-        cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, bt, bs, kq_scale, il);
+        cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, bt, bs, kq_scale, il, mctx_cur->get_turbo_rotation_inv());
     }
     cb(cur, "kqv_out", il);
 
@@ -2730,7 +2774,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, nullptr, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, nullptr, 0, kq_scale, il, nullptr);
     cb(cur, "kqv_out", il);
 
     if (wo) {

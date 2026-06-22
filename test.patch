@@ -1,0 +1,12 @@
+--- ggml/src/ggml-cuda/fwht.cu
++++ ggml/src/ggml-cuda/fwht.cu
+@@ -48,6 +48,10 @@
+ bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
+     GGML_ASSERT(ggml_are_same_shape(src, dst));
+     if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
+         return false;
+     }
++    if (src->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
++        return false;
++    }
+     const int     n    = src->ne[0];

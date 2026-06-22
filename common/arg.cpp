@@ -370,6 +370,10 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
             return type;
         }
     }
+    // Ollama compatibility: allow turbo3_0 to match turbo3
+    if (s == "turbo2_0") return GGML_TYPE_TURBO2_0;
+    if (s == "turbo3_0") return GGML_TYPE_TURBO3_0;
+    if (s == "turbo4_0") return GGML_TYPE_TURBO4_0;
     throw std::runtime_error("Unsupported cache type: " + s);
 }
 

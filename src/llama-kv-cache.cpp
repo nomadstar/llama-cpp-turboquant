@@ -384,38 +384,54 @@ llama_kv_cache::llama_kv_cache(
         ggml_init_params params = {
             /* .mem_size   = */ 4*ggml_tensor_overhead() + 2*128*128*sizeof(float) + 128*sizeof(float),
             /* .mem_buffer = */ nullptr,
-            /* .no_alloc   = */ false,
+            /* .no_alloc   = */ true,
         };
 
         ggml_context_ptr ctx { ggml_init(params) };
 
         const int64_t rot_size = (head_dim == 32) ? 32 : 128;
-        const float * rot_data = (head_dim == 32)
+        const float * rot_data_fwd = (head_dim == 32)
+            ? nullptr  // TODO: TURBO_ROTATION_32_R when available
+            : TURBO_ROTATION_R;
+
+        const float * rot_data_inv = (head_dim == 32)
             ? nullptr  // TODO: TURBO_ROTATION_32_RT when available
             : TURBO_ROTATION_RT;
 
-        if (rot_data && turbo_quant_k) {
+        if (rot_data_fwd && turbo_quant_k) {
             turbo_rotation = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, rot_size, rot_size);
-            memcpy(turbo_rotation->data, rot_data, rot_size*rot_size*sizeof(float));
             ggml_format_name(turbo_rotation, "turbo_rot_fwd");
         }
 
-        if (rot_data && turbo_quant_v) {
+        if (rot_data_inv && turbo_quant_v) {
             turbo_rotation_inv = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, rot_size, rot_size);
-            memcpy(turbo_rotation_inv->data, rot_data, rot_size*rot_size*sizeof(float));
             ggml_format_name(turbo_rotation_inv, "turbo_rot_inv");
         }
 
         // InnerQ: per-channel scale_inv for Q/V equalization
         // Allocate as 1D tensor with rot_size floats, initialized to 1.0
         turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, rot_size);
-        for (int i = 0; i < rot_size; ++i) {
-            ((float *) turbo_innerq_scale_inv->data)[i] = 1.0f;
-        }
         ggml_format_name(turbo_innerq_scale_inv, "turbo_innerq_scale_inv");
 
-        // keep the context alive with a minimal CPU buffer
-        auto * turbo_buf = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), 0);
+        // keep the context alive with a CPU buffer
+        auto * turbo_buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), ggml_backend_cpu_buffer_type());
+        if (turbo_buf) {
+            ggml_backend_buffer_set_usage(turbo_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+
+        if (turbo_rotation && rot_data_fwd) {
+            ggml_backend_tensor_set(turbo_rotation, rot_data_fwd, 0, rot_size*rot_size*sizeof(float));
+        }
+
+        if (turbo_rotation_inv && rot_data_inv) {
+            ggml_backend_tensor_set(turbo_rotation_inv, rot_data_inv, 0, rot_size*rot_size*sizeof(float));
+        }
+
+        if (turbo_innerq_scale_inv) {
+            std::vector<float> ones(rot_size, 1.0f);
+            ggml_backend_tensor_set(turbo_innerq_scale_inv, ones.data(), 0, rot_size*sizeof(float));
+        }
+
         ctxs_bufs.emplace_back(std::move(ctx), turbo_buf);
     }
 
@@ -743,8 +759,10 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() 
     for (const auto & [ctx, buf] : ctxs_bufs) {
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
 
-        if (hparams.no_alloc) {
-            GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) == nullptr);
+        if (hparams.no_alloc && ggml_backend_buffer_get_base(buf.get()) == nullptr) {
+            if (!ggml_get_no_alloc(ctx.get())) {
+                continue; // skip contexts that manage their own allocations (e.g. TurboQuant constants)
+            }
             ret[buft] += ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
         } else {
             // GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) != nullptr); // multi_buffer does not have a defined base

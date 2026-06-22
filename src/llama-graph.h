@@ -884,6 +884,20 @@ struct llm_graph_context {
                   int64_t   n_head_kv,
                       int   il) const;
 
+    ggml_tensor * build_attn_mha(
+             ggml_tensor * q,
+             ggml_tensor * k,
+             ggml_tensor * v,
+             ggml_tensor * kq_b,
+             ggml_tensor * kq_mask,
+             ggml_tensor * sinks,
+             ggml_tensor * v_mla,
+             ggml_tensor * block_table,
+                   uint32_t block_size,
+                   float   kq_scale,
+                     int   il,
+             ggml_tensor * turbo_rot_inv = nullptr) const;
+
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
              ggml_tensor * up,
