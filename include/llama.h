@@ -807,14 +807,14 @@ extern "C" {
     struct llama_paged_scheduler;
 
     typedef struct llama_paged_batch_info {
-        int32_t   n_blocks_per_seq = 0;
-        int32_t   n_seq            = 0;
-        int32_t   n_tokens         = 0;
-        int32_t * write_slots    = NULL;  // [n_tokens]
-        int32_t * block_table    = NULL;  // [n_seq * n_blocks_per_seq]
-        int32_t * context_lens   = NULL;  // [n_seq]
-        int32_t * batch_offsets  = NULL;  // [n_seq]
-        int32_t * batch_lens     = NULL;  // [n_seq]
+        int32_t   n_blocks_per_seq;
+        int32_t   n_seq;
+        int32_t   n_tokens;
+        int32_t * write_slots;    // [n_tokens]
+        int32_t * block_table;    // [n_seq * n_blocks_per_seq]
+        int32_t * context_lens;   // [n_seq]
+        int32_t * batch_offsets;  // [n_seq]
+        int32_t * batch_lens;     // [n_seq]
     } llama_paged_batch_info;
 
     struct llama_paged_seq_state {

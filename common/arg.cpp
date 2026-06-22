@@ -4182,7 +4182,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     // TriAttention KV cache eviction args
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-stats"}, "PATH",
         "path to .triattention calibration file (enables TriAttention eviction)",
         [](common_params & params, const std::string & value) {
@@ -4190,7 +4190,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_STATS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-budget"}, "N",
         string_format("max KV entries to retain after pruning (default: %d)", 2048),
         [](common_params & params, int value) {
@@ -4198,7 +4198,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_BUDGET").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-window"}, "N",
         string_format("pruning interval in decode tokens (default: %d)", 128),
         [](common_params & params, int value) {
@@ -4206,7 +4206,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_WINDOW").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-offset-max"}, "N",
         string_format("max geometric offset for scoring (default: %d)", 65536),
         [](common_params & params, int value) {
@@ -4214,7 +4214,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_OFFSET_MAX").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-mode"}, "MODE",
         "pruning granularity: global, per-kv-head, per-layer-head (default: global)",
         [](common_params & params, const std::string & value) {
@@ -4225,7 +4225,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_MODE").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-trigger"}, "MODE",
         "pruning trigger: interval, slack (default: interval)",
         [](common_params & params, const std::string & value) {
@@ -4235,7 +4235,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_TRIGGER").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-agg"}, "MODE",
         "score aggregation: mean, max (default: mean)",
         [](common_params & params, const std::string & value) {
@@ -4245,7 +4245,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_AGG").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-seed"}, "N",
         "RNG seed for tie-breaking noise, -1 to disable (default: 0)",
         [](common_params & params, int value) {
@@ -4253,7 +4253,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TRIATTENTION_SEED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-normalize"},
         "z-score normalize scores per head before ranking",
         [](common_params & params) {
@@ -4261,7 +4261,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-no-protect-prefill"},
         "allow evicting prompt tokens (default: prompt tokens are protected)",
         [](common_params & params) {
@@ -4269,7 +4269,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-disable-mlr"},
         "ablation: disable MLR frequency weighting",
         [](common_params & params) {
@@ -4277,7 +4277,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-disable-trig"},
         "ablation: use norm-only scoring (no trigonometric component)",
         [](common_params & params) {
@@ -4285,7 +4285,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
-    ctx_arg.add_opt(common_arg(
+    add_opt(common_arg(
         {"--triattention-log"},
         "log TriAttention pruning events to stderr",
         [](common_params & params) {
