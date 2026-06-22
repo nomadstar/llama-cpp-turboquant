@@ -2614,6 +2614,9 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+    const auto * mctx_iswa = inp->mctx;
+    const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
+
     // TurboQuant: rotate Q into the WHT domain and scale by innerq_scale_inv
     if (inp->block_table) {
         ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
@@ -2627,7 +2630,7 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
-    // these nodes are added to the graph together so that they are not reorderedd
+    // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     ggml_build_forward_expand(gf, q_cur);
 
@@ -2638,10 +2641,6 @@ ggml_tensor * llm_graph_context::build_attn(
     if (v_cur) {
         ggml_build_forward_expand(gf, v_cur);
     }
-
-    const auto * mctx_iswa = inp->mctx;
-
-    const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
     // optionally store to KV cache
     if (k_cur) {
