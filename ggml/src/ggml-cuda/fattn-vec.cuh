@@ -277,13 +277,17 @@ static __global__ void flash_attn_ext_vec(
 #endif // V_DOT2_F32_F16_AVAILABLE
     }
 
-    // Build shared-memory LUT: turbo_lut[d][c] = half(Q[d] * scale * centroid[c])
+    // Build shared-memory LUT: turbo_lut[d][c] = half(Q[d] * scale_lut * centroid[c])
+    // When use_logit_softcap, scale has been pre-divided by logit_softcap (scale = orig/softcap).
+    // Storing such tiny fp16 values causes precision loss after accumulating D elements.
+    // Use the original (un-divided) scale for LUT, then compensate after the dot product.
     if constexpr (n_centroids_lut > 0 && ncols == 1) {
         const float * centroids_ptr = (type_K == GGML_TYPE_TURBO3_0) ? TURBO_CENTROIDS_3BIT :
                                       TURBO_CENTROIDS_2BIT;
         const float * Q_f = (const float *)(Q + 0*nb01);
+        const float scale_lut = use_logit_softcap ? (scale * logit_softcap) : scale;
         for (int d = tid; d < D; d += nthreads) {
-            const float q_val = Q_f[d] * scale;
+            const float q_val = Q_f[d] * scale_lut;
             for (int c = 0; c < n_centroids_lut; c++) {
                 turbo_lut[d][c] = __float2half(q_val * centroids_ptr[c]);
             }
@@ -360,6 +364,11 @@ static __global__ void flash_attn_ext_vec(
                 }
 
                 if (use_logit_softcap) {
+                    // Turbo LUT was built with original scale (scale*logit_softcap), so
+                    // sum is logit_softcap× too large — divide back before tanh.
+                    if constexpr (n_centroids_lut > 0 && ncols == 1) {
+                        sum /= logit_softcap;
+                    }
                     sum = logit_softcap*tanhf(sum);
                 }
 
