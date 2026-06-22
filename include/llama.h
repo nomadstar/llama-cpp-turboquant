@@ -775,6 +775,31 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    // Initialize TriAttention KV cache eviction from a calibration file.
+    // Returns 0 on success, -1 on failure (file not found, incompatible model, etc.).
+    // stats_path: path to .triattention binary calibration file
+    // budget:     max KV positions to retain after each pruning pass
+    // divide_length: pruning interval in decode tokens
+    // offset_max: max geometric offset for scoring
+    // mode:       0=global, 1=per-kv-head, 2=per-layer-head
+    // trigger:    0=interval, 1=slack
+    // agg:        0=mean, 1=max
+    LLAMA_API int32_t llama_triattention_init(
+            struct llama_context * ctx,
+                      const char * stats_path,
+                         int32_t   budget,
+                         int32_t   divide_length,
+                         int32_t   offset_max,
+                         int32_t   mode,
+                         int32_t   trigger,
+                         int32_t   agg,
+                         int32_t   seed,
+                            bool   normalize_scores,
+                            bool   protect_prefill,
+                            bool   disable_mlr,
+                            bool   disable_trig,
+                            bool   enable_logging);
+
     //
     // State / sessions
     //
