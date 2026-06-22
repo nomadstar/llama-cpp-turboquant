@@ -59,7 +59,7 @@ def parse_args():
     p.add_argument("--sample-heads",type=int, default=0,    help="Attention heads to sample (0 = all)")
     p.add_argument("--max-seq-len", type=int, default=2048, help="Token window length per sample")
     p.add_argument("--device",      default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--dtype",       default="float32", choices=["float32", "bfloat16"])
+    p.add_argument("--dtype",       default="bfloat16", choices=["float32", "bfloat16"])
     p.add_argument("--seed",        type=int, default=42)
     return p.parse_args()
 
@@ -73,7 +73,7 @@ def load_model_and_tokenizer(model_id, device, dtype_str):
     print(f"[calibrate] Loading model ({dtype_str}) …")
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,
         device_map=device,
         trust_remote_code=True,
     )
