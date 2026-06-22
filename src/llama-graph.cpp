@@ -2118,6 +2118,18 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 #endif
         }
 
+        // TurboQuant: inverse WHT on attention output to undo V rotation.
+        // The turbo quantize kernel stores V in WHT domain; after softmax-weighted
+        // sum the output is also in WHT domain. Apply inverse WHT (direction=1)
+        // to recover the original feature space.
+        // cur shape here: (n_embd_head_v, n_head, n_tokens, n_stream)
+        // ggml_turbo_wht with ne[0]=head_dim applies WHT per head correctly.
+        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
+            if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
+            cur = ggml_turbo_wht(ctx0, cur, 1, 0, nullptr);  // direction=1 (inverse), group_size=auto
+            cb(cur, "turbo_v_unwht", il);
+        }
+
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
@@ -2177,6 +2189,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         // recombine streams
         cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+
+        // TurboQuant: inverse WHT to undo V rotation (non-flash path)
+        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
+            if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
+            cur = ggml_turbo_wht(ctx0, cur, 1, 0, nullptr);  // direction=1 (inverse)
+            cb(cur, "turbo_v_unwht", il);
+        }
 
         if (!cparams.offload_kqv) {
             // all nodes between the KV store and the attention output are run on the CPU
