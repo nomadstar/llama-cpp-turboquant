@@ -65,7 +65,7 @@ extern "C" {
     void dequantize_row_turbo2_0(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     void dequantize_row_turbo3_0(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     void dequantize_row_turbo4_0(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
-    void turbo_cpu_iwht_exported(float * x, int group_size);
+    void turbo_cpu_fwht_inverse(float * x, int group_size);
 }
 
 // Standard ggml dequant for Q8_0, F16, etc.
@@ -623,7 +623,7 @@ static void triattention_dequant_kv_head(
             // Process in 128-element blocks (WHT block size)
             for (uint32_t b = 0; b < padded_hd; b += 128) {
                 memcpy(final_dst + b, dequant_tmp.data() + b, 128 * sizeof(float));
-                turbo_cpu_iwht_exported(final_dst + b, 128);
+                turbo_cpu_fwht_inverse(final_dst + b, 128);
             }
         }
     }
