@@ -98,12 +98,10 @@ bool llama_paged_scheduler_impl::queue_request(llama_sequence_group group) {
 void llama_paged_scheduler_impl::insert_sorted_by_arrival_time(llama_sequence_group_ptr    new_group_ptr,
                                                                llama_sequence_group_list & list) {
     GGML_ASSERT(new_group_ptr && "New group cannot be sorted because it's nullptr.");
-    auto it =
-        std::lower_bound(list.begin(), list.end(), new_group_ptr->t_arrival_time,
-                         [](const llama_sequence_group_ptr & group, int64_t time) {
-                             GGML_ASSERT(group && "group cannot be checked for arrival time because it's nullptr.");
-                             return group->t_arrival_time < time;
-                         });
+    auto it = list.begin();
+    while (it != list.end() && (*it)->t_arrival_time < new_group_ptr->t_arrival_time) {
+        ++it;
+    }
     list.insert(it, std::move(new_group_ptr));
 }
 
