@@ -508,23 +508,17 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_TURBO3_0:
-            // turbo3 VEC kernel instantiated for D in {64, 128, 256}.
-            if (K->ne[0] % 64 != 0) {
-                return BEST_FATTN_KERNEL_NONE;
-            }
-            break;
         case GGML_TYPE_TURBO2_0:
-            // turbo2 VEC kernel instantiated for D in {64, 128, 256}.
+        case GGML_TYPE_TURBO4_0: {
+            // Turbo types only support the VEC kernel (native inline dequant).
+            // TILE/MMA/WMMA paths have no turbo dequant and would produce wrong results.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
-            break;
-        case GGML_TYPE_TURBO4_0:
-            // turbo4 VEC kernel instantiated for D in {64, 128, 256}.
-            if (K->ne[0] % 64 != 0) {
-                return BEST_FATTN_KERNEL_NONE;
-            }
-            break;
+            const bool vec_ok = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192
+                                 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+            return vec_ok ? BEST_FATTN_KERNEL_VEC : BEST_FATTN_KERNEL_NONE;
+        }
         default:
             return BEST_FATTN_KERNEL_NONE;
     }
