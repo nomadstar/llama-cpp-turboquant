@@ -1,26 +1,22 @@
 # llama.cpp + TurboQuant+
 
-> Production-grade KV-cache compression, pruning, and paged memory management for llama.cpp, with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan.
+> KV-cache compression for llama.cpp with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan. TriAttention and PagedAttention are in-progress integrations not yet active at runtime.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Status: WIP](https://img.shields.io/badge/status-work--in--progress-yellow.svg)](https://github.com/TheTom/llama-cpp-turboquant)
 [![Codec papers](https://img.shields.io/badge/codec-turboquant__plus-orange.svg)](https://github.com/TheTom/turboquant_plus)
 
-A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) combining three KV cache optimization layers:
+A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) targeting three KV cache optimization layers. Current status:
 
-- **TurboQuant+** — Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. Codec design and papers at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus).
-- **TriAttention** — prefill-time KV pruning based on arXiv:2604.04921; eliminates low-contribution positions before they enter the cache.
-- **PagedAttention** — block-table KV memory management for efficient multi-sequence serving.
-
-All three stack on the same `--cache-type-k` / `--cache-type-v` interface; no flags conflict.
+| Feature | Status | Notes |
+|---|---|---|
+| **TurboQuant+** | Partial | Works via `--cache-type-k/v turbo*`. Known bug: `sinks=1` + turbo3 + logit_softcap produces wrong results on CUDA. |
+| **TriAttention** | Pending | Engine implemented, not wired to CLI. Needs a per-model `.triattention` calibration file and a `--triattention-calib` flag. |
+| **PagedAttention** | Pending | Block allocator stub exists, not connected to the inference graph. |
 
 ### Lineage
 
 TurboQuant+ is inspired by Google's original **TurboQuant** paper (ICLR 2026), which introduced Walsh-Hadamard-rotated polar codebook quantization for KV cache and demonstrated 4.6x compression at ~1% PPL loss. This project extends that foundation substantially -- adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, attention-gated sparse V dequantization, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo4` tier variants, and cross-backend kernel coverage (CUDA `dp4a`, HIP/ROCm RDNA/CDNA, Vulkan coopmat, Metal TurboFlash + V2.1 fused kernels).
-
-**TriAttention** pruning is based on the RoPE-inverted key vector algorithm described in [arXiv:2604.04921](https://arxiv.org/abs/2604.04921). Implemented in `src/llama-kv-cache.cpp` (`init_triattention`).
-
-**PagedAttention** memory management is inspired by the block-table design from vLLM ([arXiv:2309.06180](https://arxiv.org/abs/2309.06180)). Implemented in `src/llama-kv-cache.cpp` (`block_allocator_init`).
 
 This fork is additive: every existing llama.cpp quantization, model, and backend continues to work unchanged. New types are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces.
 
@@ -57,14 +53,6 @@ This fork's TurboQuant integration is used in:
 | `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
 
 All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
-
-### Attention pruning (TriAttention)
-
-Based on [arXiv:2604.04921](https://arxiv.org/abs/2604.04921). During prefill, TriAttention identifies and prunes KV positions whose attention contribution falls below a learned threshold, reducing effective KV cache size before quantization is applied. Enabled at runtime via `--triattention-threshold`. Complements turbo KV compression: TriAttention reduces *which* positions are stored; TurboQuant compresses *how* they are stored.
-
-### Paged KV cache (PagedAttention)
-
-Block-table-indexed KV allocation adapted from the PagedAttention design. Rather than pre-allocating a contiguous buffer for the full context length, the cache is managed in fixed-size pages that are allocated on demand and tracked via an indirection table. Enables higher utilization when serving multiple concurrent sequences at different context lengths. Compatible with all KV quantization types including turbo.
 
 ### Compression policies
 
@@ -177,15 +165,19 @@ The following activate based on the selected types — no flags required:
 
 See the linked papers above for parameter selection guidance on a per-model basis.
 
-### TriAttention and PagedAttention
+## Pending work
 
-Both features are currently available as C++ APIs only (`init_triattention` and `block_allocator_init` in the KV cache manager). They are intended for custom integrations — e.g. a server layer that instantiates the cache directly. There are no `--triattention-threshold` or `--paged-attention-blocks` flags in `llama-cli` / `llama-server` yet.
+### TriAttention
 
-## Known limitations
+Engine is implemented (`src/llama-triattention.cpp`) based on [arXiv:2604.04921](https://arxiv.org/abs/2604.04921) — RoPE-inverted key scoring, GPU scoring path, per-head calibration. Not yet wired to the CLI or server. To activate it requires: (1) a `--triattention-calib <file>.triattention` flag connected to `init_triattention()`, and (2) a calibration file generated for the specific model.
 
-### Flash Attention with sinks + turbo3 + logit_softcap
+### PagedAttention
 
-Combining `sinks=1`, `turbo3` KV cache, and a model that uses `logit_softcap` (e.g. Gemma-family) triggers incorrect results in the CUDA `FLASH_ATTN_EXT` path. The bug is pre-existing in the merged branches and affects the VEC kernel's sinks accumulation block. Workaround: avoid `sinks` with turbo3 KV on CUDA when using Gemma-style models.
+Block allocator stub exists (`block_allocator_init` in `src/llama-kv-cache.cpp`) and the block table is declared in `src/llama-graph.h`, but it is not connected to the inference graph. Not functional.
+
+### Known bug: TurboQuant+ sinks + logit_softcap
+
+Combining `sinks=1`, turbo3 KV cache, and a model with `logit_softcap` (Gemma family) produces wrong results in the CUDA `FLASH_ATTN_EXT` path. Workaround: do not use `sinks` with turbo3 KV on CUDA with Gemma-style models.
 
 ## Citation
 
