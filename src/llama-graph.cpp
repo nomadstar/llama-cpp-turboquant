@@ -2131,6 +2131,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
         if (turbo_rot_inv) {
+            ggml_set_input(turbo_rot_inv);
             if (cur->type != GGML_TYPE_F32) {
                 cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
             }
@@ -2205,6 +2206,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cb(cur, "kqv", il);
 
         if (turbo_rot_inv) {
+            ggml_set_input(turbo_rot_inv);
             cur = ggml_mul_mat_aux(ctx0, cur, turbo_rot_inv);
             cb(cur, "kqv_wht_inv", il);
         }
@@ -2375,11 +2377,13 @@ ggml_tensor * llm_graph_context::build_attn(
     if (mctx_cur->get_turbo_rot_forward() != nullptr) {
         ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
         if (turbo_innerq_scale_inv) {
+            ggml_set_input(turbo_innerq_scale_inv);
             q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
         }
 
         ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
         if (turbo_rot_fwd) {
+            ggml_set_input(turbo_rot_fwd);
             q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
         }
     }
@@ -2487,11 +2491,13 @@ ggml_tensor * llm_graph_context::build_attn(
     if (mctx_cur->get_turbo_rot_forward() != nullptr) {
         ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
         if (turbo_innerq_scale_inv) {
+            ggml_set_input(turbo_innerq_scale_inv);
             q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
         }
 
         ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
         if (turbo_rot_fwd) {
+            ggml_set_input(turbo_rot_fwd);
             q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
         }
     }
@@ -2559,11 +2565,13 @@ ggml_tensor * llm_graph_context::build_attn(
     if (mctx_cur->get_turbo_rot_forward() != nullptr) {
         ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
         if (turbo_innerq_scale_inv) {
+            ggml_set_input(turbo_innerq_scale_inv);
             q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
         }
 
         ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
         if (turbo_rot_fwd) {
+            ggml_set_input(turbo_rot_fwd);
             q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
         }
     }
@@ -2665,17 +2673,20 @@ ggml_tensor * llm_graph_context::build_attn(
     if (mctx_cur->get_turbo_rot_forward() != nullptr) {
         ggml_tensor * turbo_innerq_scale_inv = mctx_cur->get_turbo_innerq_scale_inv();
         if (turbo_innerq_scale_inv) {
+            ggml_set_input(turbo_innerq_scale_inv);
             q_cur = ggml_mul(ctx0, q_cur, turbo_innerq_scale_inv);
         }
 
         ggml_tensor * turbo_rot_fwd = mctx_cur->get_turbo_rot_forward();
         if (turbo_rot_fwd) {
+            ggml_set_input(turbo_rot_fwd);
             q_cur = ggml_mul_mat_aux(ctx0, q_cur, turbo_rot_fwd);
         }
     }
 
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
+    // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
 
     if (k_cur) {
