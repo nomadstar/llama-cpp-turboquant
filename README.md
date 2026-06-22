@@ -1,12 +1,18 @@
 # llama.cpp + TurboQuant+
 
-> Production-grade KV-cache and weight quantization for llama.cpp, with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan.
+> Production-grade KV-cache compression, pruning, and paged memory management for llama.cpp, with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Status: WIP](https://img.shields.io/badge/status-work--in--progress-yellow.svg)](https://github.com/TheTom/llama-cpp-turboquant)
 [![Codec papers](https://img.shields.io/badge/codec-turboquant__plus-orange.svg)](https://github.com/TheTom/turboquant_plus)
 
-A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack — Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
+A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) combining three KV cache optimization layers:
+
+- **TurboQuant+** — Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. Codec design and papers at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus).
+- **TriAttention** — prefill-time KV pruning based on arXiv:2604.04921; eliminates low-contribution positions before they enter the cache.
+- **PagedAttention** — block-table KV memory management for efficient multi-sequence serving.
+
+All three stack on the same `--cache-type-k` / `--cache-type-v` interface; no flags conflict.
 
 ### Lineage — why the `+`
 
@@ -27,7 +33,7 @@ This fork's TurboQuant integration is used in:
 
 | | |
 |---|---|
-| Default branch | `feature/turboquant-kv-cache` |
+| Default branch | `feature/supermerge` |
 | Commits ahead of upstream | ~300 |
 | Upstream tracking | continuous sync from `ggml-org/llama.cpp` master |
 | Upstream PR status | not yet upstreamed; running as a long-lived feature branch |
@@ -47,6 +53,14 @@ This fork's TurboQuant integration is used in:
 | `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
 
 All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
+
+### Attention pruning (TriAttention)
+
+Based on [arXiv:2604.04921](https://arxiv.org/abs/2604.04921). During prefill, TriAttention identifies and prunes KV positions whose attention contribution falls below a learned threshold, reducing effective KV cache size before quantization is applied. Enabled at runtime via `--triattention-threshold`. Complements turbo KV compression: TriAttention reduces *which* positions are stored; TurboQuant compresses *how* they are stored.
+
+### Paged KV cache (PagedAttention)
+
+Block-table-indexed KV allocation adapted from the PagedAttention design. Rather than pre-allocating a contiguous buffer for the full context length, the cache is managed in fixed-size pages that are allocated on demand and tracked via an indirection table. Enables higher utilization when serving multiple concurrent sequences at different context lengths. Compatible with all KV quantization types including turbo.
 
 ### Compression policies
 
