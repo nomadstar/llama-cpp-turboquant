@@ -15,6 +15,10 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
 int turbo3_cpu_wht_group_size = 0;
 
@@ -78,9 +82,6 @@ static void turbo_init_rotation(void) {
     for (int i = 0; i < d * d; i++) {
         turbo_rotation[i] = (float)turbo_prng_normal();
     }
-
-    /* QR decomposition via modified Gram-Schmidt */
-    /* Q stored column-major in turbo_rotation */
 
     for (int j = 0; j < d; j++) {
         /* Normalize column j */
