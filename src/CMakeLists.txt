@@ -25,6 +25,10 @@ add_library(llama
             llama-kv-cache.cpp
             llama-kv-cache-iswa.cpp
             llama-kv-cache-dsa.cpp
+            llama-kv-cache-paged.cpp
+            llama-block-manager.cpp
+            llama-paged-scheduler.cpp
+            llama-paged-scheduler-impl.cpp
             llama-triattention.cpp
             turbo-cuda-stubs.cpp
             llama-memory.cpp

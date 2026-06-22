@@ -801,6 +801,64 @@ extern "C" {
                             bool   enable_logging);
 
     //
+    // Paged KV cache (experimental)
+    //
+
+    struct llama_paged_scheduler;
+
+    typedef struct llama_paged_batch_info {
+        int32_t   n_blocks_per_seq = 0;
+        int32_t   n_seq            = 0;
+        int32_t   n_tokens         = 0;
+        int32_t * write_slots    = NULL;  // [n_tokens]
+        int32_t * block_table    = NULL;  // [n_seq * n_blocks_per_seq]
+        int32_t * context_lens   = NULL;  // [n_seq]
+        int32_t * batch_offsets  = NULL;  // [n_seq]
+        int32_t * batch_lens     = NULL;  // [n_seq]
+    } llama_paged_batch_info;
+
+    struct llama_paged_seq_state {
+        int32_t request_id;
+        int32_t n_prompt;
+        int32_t n_decoded;
+        int32_t n_past;
+        int64_t t_arrival_us;
+        int64_t t_first_token_us;
+    };
+
+    typedef void (*llama_paged_on_finish_cb)(int32_t             request_id,
+                                             const llama_token * tokens,
+                                             int32_t             n_tokens,
+                                             void *              user_data);
+
+    LLAMA_API struct llama_paged_scheduler * llama_paged_scheduler_init(struct llama_context * ctx);
+    LLAMA_API void                           llama_paged_scheduler_free(struct llama_paged_scheduler * sched);
+
+    LLAMA_API bool llama_paged_scheduler_add_request(struct llama_paged_scheduler * sched,
+                                                     const llama_token *            tokens,
+                                                     int32_t                        n_tokens,
+                                                     int32_t                        request_id);
+
+    LLAMA_API bool llama_paged_scheduler_prepare_batch(struct llama_paged_scheduler * sched,
+                                                       struct llama_batch *           batch);
+
+    LLAMA_API void llama_paged_scheduler_update(struct llama_paged_scheduler * sched,
+                                                struct llama_batch *           batch,
+                                                const llama_token *            tokens,
+                                                const int8_t *                 stop_flags);
+
+    LLAMA_API bool llama_paged_scheduler_get_seq_state(struct llama_paged_scheduler * sched,
+                                                       int32_t                        request_id,
+                                                       struct llama_paged_seq_state * out_state);
+
+    LLAMA_API const struct llama_paged_batch_info * llama_paged_scheduler_get_batch_info(
+        const struct llama_paged_scheduler * sched);
+
+    LLAMA_API void llama_paged_scheduler_set_on_finish(struct llama_paged_scheduler * sched,
+                                                       llama_paged_on_finish_cb       cb,
+                                                       void *                         user_data);
+
+    //
     // State / sessions
     //
 
