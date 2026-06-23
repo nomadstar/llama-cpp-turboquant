@@ -683,6 +683,10 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    // Sync all streams before zeroing: non-blocking compute streams never
+    // synchronize with cudaStreamPerThread, so we must flush all in-flight
+    // GPU work first to avoid a race with paged KV-cache clears between chunks.
+    CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemsetAsync(ctx->dev_ptr, value, buffer->size, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
