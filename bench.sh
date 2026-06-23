@@ -70,6 +70,27 @@ except: pass
     fi
 done
 
+echo "=== Local Qwen2.5-Coder-1.5B ==="
+LOCAL_BLOB="qwen2.5-coder-1.5b-bf16.gguf"
+LOCAL_STATS="qwen2.5-coder-1.5b.triattention"
+if [ -f "$LOCAL_BLOB" ]; then
+    ./build-tri/bin/llama-bench \
+      -m "$LOCAL_BLOB" --cache-type-v turbo3 --cache-type-k q8_0 -r 3 \
+      > "triattention_bench_local_qwen.txt" 2>&1
+
+    ./build-super/bin/llama-bench \
+      -m "$LOCAL_BLOB" --cache-type-v turbo3 --cache-type-k q8_0 -r 3 \
+      > "supermerge_bench_local_qwen.txt" 2>&1
+
+    if [ -f "$LOCAL_STATS" ]; then
+        ./build-super/bin/llama-bench \
+          -m "$LOCAL_BLOB" --cache-type-v turbo3 --cache-type-k q8_0 \
+          --triattention-stats "$LOCAL_STATS" \
+          --triattention-budget 1024 -r 3 \
+          > "supermerge_bench_triattention_local_qwen.txt" 2>&1
+    fi
+fi
+
 echo "Listo."
 ls -lh *bench*.txt *results*.txt *backend*.txt 2>/dev/null
 zip results.zip *bench*.txt *results*.txt *backend*.txt
