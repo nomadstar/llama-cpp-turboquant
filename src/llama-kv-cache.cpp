@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <vector>
 
 // InnerQ: cross-TU shared state for CUDA per-channel equalization.
 // These are defined in ggml-cuda/turbo-innerq.cu (when CUDA is enabled).
@@ -1340,18 +1341,21 @@ ggml_tensor * llama_kv_cache::build_input_v_page_table(ggml_context * ctx, uint3
 
 void llama_kv_cache::set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, const slot_info & sinfo) const {
     GGML_ASSERT(pg_enabled);
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    const uint32_t ns     = sinfo.s1 - sinfo.s0 + 1;
+    const uint32_t ns      = sinfo.s1 - sinfo.s0 + 1;
     const uint32_t n_lpage = (uint32_t) dst->ne[0];
-    int32_t * data = (int32_t *) dst->data;
+    const uint32_t nelems  = ns * n_lpage;
+
+    // Build the page table in a temporary host buffer, then push via
+    // ggml_backend_tensor_set which works for both host and device tensors.
+    std::vector<int32_t> tmp(nelems);
     for (uint32_t s = 0; s < ns; ++s) {
         const uint32_t strm = sinfo.s0 + s;
         for (uint32_t lp = 0; lp < n_lpage; ++lp) {
             const int32_t pblock = pg_page_table[strm][lp];
-            // pblock == -1 means the page was never written — use block 0 as safe fallback (padding region)
-            data[s * n_lpage + lp] = (pblock >= 0) ? pblock : 0;
+            tmp[s * n_lpage + lp] = (pblock >= 0) ? pblock : 0;
         }
     }
+    ggml_backend_tensor_set(dst, tmp.data(), 0, nelems * sizeof(int32_t));
     (void) n_kv;
 }
 
