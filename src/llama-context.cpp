@@ -456,6 +456,9 @@ void llama_context::sched_reserve() {
         if (fa_device_mismatch) {
             cparams.flash_attn = false;
             LLAMA_LOG_WARN("%s: Flash Attention was auto, set to disabled\n", __func__);
+            if (memory) {
+                memory->on_flash_attn_disabled();
+            }
         } else {
             cparams.flash_attn = true;
             LLAMA_LOG_INFO("%s: Flash Attention was auto, set to enabled\n", __func__);

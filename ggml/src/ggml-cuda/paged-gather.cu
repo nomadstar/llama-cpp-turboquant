@@ -48,37 +48,43 @@ void ggml_cuda_gather_paged_v(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const char * d_pool = (const char *) v_pool->data;
     char       * d_out  = (char *)       dst->data;
 
-    // page_table is a ggml_set_input host tensor: its data pointer is CPU memory.
-    // Upload it to a pooled device buffer so the kernel can read it from GPU.
-    const int32_t * h_ptable = (const int32_t *) page_table->data;
+    // page_table may be on host (CUDA_Host) or device, depending on scheduler placement.
+    // Use cudaMemcpyDefault so the copy works in both cases without a CPU read.
+    const void * ptable_src = page_table->data;
 
     // [DIAG] Print gather params for first layer of every decode call.
     {
         static int  s_decode_call = 0;
         static bool s_first_layer = true;
         if (s_first_layer) {
+            cudaPointerAttributes ptbl_attr{};
+            cudaPointerGetAttributes(&ptbl_attr, ptable_src);
+            const bool ptable_on_host = (ptbl_attr.type == cudaMemoryTypeHost ||
+                                         ptbl_attr.type == cudaMemoryTypeUnregistered);
             fprintf(stderr,
-                "[PGATHER#%d] n_kv=%d bs=%d ns=%d n_lpage=%d ptable=[",
-                s_decode_call, n_kv, block_size, ns, n_lpage);
-            for (int i = 0; i < ptable_elems; ++i) {
-                fprintf(stderr, "%d%s", h_ptable[i], (i+1<ptable_elems)?",":"");
+                "[PGATHER#%d] n_kv=%d bs=%d ns=%d n_lpage=%d ptable_mem=%d ptable=[",
+                s_decode_call, n_kv, block_size, ns, n_lpage, (int)ptbl_attr.type);
+            if (ptable_on_host) {
+                const int32_t * h = (const int32_t *) ptable_src;
+                for (int i = 0; i < ptable_elems; ++i) {
+                    fprintf(stderr, "%d%s", h[i], (i+1<ptable_elems)?",":"");
+                }
+            } else {
+                fprintf(stderr, "<on device>");
             }
-            // Check whether dst lives on a CUDA buffer (non-null) or CPU
-            bool dst_on_cuda = (dst->buffer != nullptr);
-            cudaPointerAttributes attr{};
-            cudaPointerGetAttributes(&attr, d_out);
-            fprintf(stderr, "] dst_buf=%s dst_mem=%d pool=%p out=%p\n",
-                    dst_on_cuda ? "cuda" : "NULL",
-                    (int)attr.type, (void*)d_pool, (void*)d_out);
+            cudaPointerAttributes out_attr{};
+            cudaPointerGetAttributes(&out_attr, d_out);
+            fprintf(stderr, "] dst_mem=%d pool=%p out=%p\n",
+                    (int)out_attr.type, (void*)d_pool, (void*)d_out);
             ++s_decode_call;
         }
-        s_first_layer = !s_first_layer; // flip; reset to true after 2nd layer (simplistic but enough)
+        s_first_layer = !s_first_layer;
     }
 
     ggml_cuda_pool_alloc<int32_t> ptable_buf(ctx.pool(), ptable_elems);
-    CUDA_CHECK(cudaMemcpyAsync(ptable_buf.get(), h_ptable,
+    CUDA_CHECK(cudaMemcpyAsync(ptable_buf.get(), ptable_src,
                                ptable_elems * sizeof(int32_t),
-                               cudaMemcpyHostToDevice, ctx.stream()));
+                               cudaMemcpyDefault, ctx.stream()));
 
     const int32_t n_rows    = n_kv * ns;
     const int32_t n_threads = (int32_t) std::min((int64_t)128, (row_bytes + 3) / 4);
