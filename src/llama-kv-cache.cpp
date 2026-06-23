@@ -2607,7 +2607,7 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
 }
 
 bool llama_kv_cache_context::is_paged() const {
-    return kv->pg_enabled;
+    return kv->get_pg_enabled();
 }
 
 ggml_tensor * llama_kv_cache_context::get_v_paged(ggml_context * ctx, int32_t il) const {
