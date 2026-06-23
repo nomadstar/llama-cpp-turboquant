@@ -25,6 +25,13 @@ static __global__ void paged_gather_v_kernel(
     const char * src = pool + src_row  * row_bytes;
     char       * dst = out  + (int64_t)blockIdx.x * row_bytes;
 
+    // [DIAG-GATHER] For the very first output row, report pblock and first 4 bytes of src
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        const int32_t v0 = *reinterpret_cast<const int32_t *>(src);
+        printf("[PAGED] kern row0: pblock=%d src_row=%lld first4bytes=0x%08x pool=%p\n",
+               pblock, (long long)src_row, (unsigned)v0, (const void*)pool);
+    }
+
     // 4-byte aligned loop (row_bytes is always a multiple of 4)
     for (int64_t i = (int64_t)threadIdx.x * 4; i < row_bytes; i += (int64_t)blockDim.x * 4) {
         *reinterpret_cast<int32_t *>(dst + i) = *reinterpret_cast<const int32_t *>(src + i);
