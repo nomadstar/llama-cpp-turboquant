@@ -549,6 +549,10 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
+    // TriAttention: per-layer KV type override from calibration file
+    std::string triattention_stats;     // path to .triattention file
+    int         triattention_budget = 0; // token budget (0 = use file defaults)
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

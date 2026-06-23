@@ -2022,6 +2022,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--triattention-stats"}, "FNAME",
+        "path to .triattention calibration file (enables per-layer KV type selection)",
+        [](common_params & params, const std::string & value) {
+            params.triattention_stats = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--triattention-budget"}, "N",
+        "token budget for TriAttention (0 = use file defaults; higher = less compression)",
+        [](common_params & params, int value) {
+            params.triattention_budget = value;
+        }
+    ));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {
