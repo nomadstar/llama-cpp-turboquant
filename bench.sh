@@ -1,14 +1,29 @@
 #!/bin/bash
 set -x
 
-# ── Compilar ambas ramas ────────────────────────────────────────
-git checkout feature/triattention-paged
-cmake -B build-tri -DGGML_CUDA=ON
-cmake --build build-tri --config Release --parallel 6
+CCACHE_FLAGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
 
-git checkout feature/supermerge
-cmake -B build-super -DGGML_CUDA=ON
-cmake --build build-super --config Release --parallel 6
+build_if_changed() {
+    local branch="$1"
+    local build_dir="$2"
+    local hash_file=".last_build_hash_${build_dir}"
+
+    git checkout "$branch"
+    local current_hash
+    current_hash=$(git rev-parse HEAD)
+
+    if [ -f "$hash_file" ] && [ "$(cat "$hash_file")" = "$current_hash" ]; then
+        echo "=== $branch: sin cambios ($(git log -1 --format='%h %s')), saltando compilación ==="
+    else
+        cmake -B "$build_dir" -DGGML_CUDA=ON $CCACHE_FLAGS
+        cmake --build "$build_dir" --config Release --parallel 6
+        echo "$current_hash" > "$hash_file"
+    fi
+}
+
+# ── Compilar ambas ramas (solo si hubo cambios) ─────────────────
+build_if_changed feature/triattention-paged build-tri
+build_if_changed feature/supermerge         build-super
 
 # ── Correctitud (una vez por rama) ─────────────────────────────
 ./build-tri/bin/test-quantize-fns  > triattention_results.txt     2>&1 || true
