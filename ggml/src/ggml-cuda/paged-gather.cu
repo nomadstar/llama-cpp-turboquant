@@ -25,13 +25,6 @@ static __global__ void paged_gather_v_kernel(
     const char * src = pool + src_row  * row_bytes;
     char       * dst = out  + (int64_t)blockIdx.x * row_bytes;
 
-    // [DIAG-GATHER] For the very first output row, report pblock and first 4 bytes of src
-    if (blockIdx.x == 0 && threadIdx.x == 0) {
-        const int32_t v0 = *reinterpret_cast<const int32_t *>(src);
-        printf("[PAGED] kern row0: pblock=%d src_row=%lld first4bytes=0x%08x pool=%p\n",
-               pblock, (long long)src_row, (unsigned)v0, (const void*)pool);
-    }
-
     // 4-byte aligned loop (row_bytes is always a multiple of 4)
     for (int64_t i = (int64_t)threadIdx.x * 4; i < row_bytes; i += (int64_t)blockDim.x * 4) {
         *reinterpret_cast<int32_t *>(dst + i) = *reinterpret_cast<const int32_t *>(src + i);
@@ -46,20 +39,27 @@ void ggml_cuda_gather_paged_v(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     memcpy(&block_size, dst->op_params + 0, sizeof(int32_t));
     memcpy(&n_kv,       dst->op_params + 4, sizeof(int32_t));
 
-    const int32_t ns     = (int32_t) page_table->ne[1];
+    const int32_t ns      = (int32_t) page_table->ne[1];
     const int32_t n_lpage = (int32_t) page_table->ne[0];
+    const int32_t ptable_elems = ns * n_lpage;
 
     const int64_t row_bytes = (int64_t) ggml_row_size(v_pool->type, v_pool->ne[0]);
 
-    const char    * d_pool   = (const char *)    v_pool->data;
-    const int32_t * d_ptable = (const int32_t *) page_table->data;
-    char          * d_out    = (char *)           dst->data;
+    const char * d_pool = (const char *) v_pool->data;
+    char       * d_out  = (char *)       dst->data;
 
-    const int32_t n_rows  = n_kv * ns;
+    // page_table is a ggml_set_input host tensor: its data pointer is CPU memory.
+    // Upload it to a pooled device buffer so the kernel can read it from GPU.
+    const int32_t * h_ptable = (const int32_t *) page_table->data;
+    ggml_cuda_pool_alloc<int32_t> ptable_buf(ctx.pool(), ptable_elems);
+    CUDA_CHECK(cudaMemcpyAsync(ptable_buf.get(), h_ptable,
+                               ptable_elems * sizeof(int32_t),
+                               cudaMemcpyHostToDevice, ctx.stream()));
+
+    const int32_t n_rows    = n_kv * ns;
     const int32_t n_threads = (int32_t) std::min((int64_t)128, (row_bytes + 3) / 4);
 
-    fprintf(stderr, "[PAGED] cuda: gather kernel n_kv=%d ns=%d n_lpage=%d\n", n_kv, ns, n_lpage);
     paged_gather_v_kernel<<<n_rows, n_threads, 0, ctx.stream()>>>(
-        d_pool, d_ptable, d_out,
+        d_pool, ptable_buf.get(), d_out,
         n_kv, ns, n_lpage, block_size, row_bytes);
 }

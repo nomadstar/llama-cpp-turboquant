@@ -1352,13 +1352,6 @@ void llama_kv_cache::set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, co
             data[s * n_lpage + lp] = (pblock >= 0) ? pblock : 0;
         }
     }
-    // [DIAG-PTABLE] Show first 4 page table entries so we can verify per-chunk allocation
-    fprintf(stderr, "[PAGED] ptable: n_kv=%u ns=%u n_lpage=%u data=[%d,%d,%d,%d]\n",
-            n_kv, ns, n_lpage,
-            n_lpage > 0 ? data[0] : -1,
-            n_lpage > 1 ? data[1] : -1,
-            n_lpage > 2 ? data[2] : -1,
-            n_lpage > 3 ? data[3] : -1);
     (void) n_kv;
 }
 
