@@ -451,9 +451,10 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
             memset(normalized, 0, d * sizeof(float));
         }
 
-        /* Step 2: Rotate */
+        /* Step 2: WHT rotation — must match GPU k_set_rows_turbo4 which uses WHT, not a dense matrix */
         float rotated[TURBO_D];
-        matvec(turbo_rotation, normalized, rotated, d);
+        memcpy(rotated, normalized, d * sizeof(float));
+        turbo_cpu_fwht(rotated, d);
 
 #if TURBO4_USE_4BIT
         /* Step 3: 4-bit quantization (16 centroids) */
@@ -559,9 +560,10 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
             uint8_t idx = (x[block].qs[i / 2] >> ((i % 2) * 4)) & 0xF;
             rotated[i] = CENTROIDS_4BIT[idx];
         }
+        /* Centroid values already represent WHT-rotated elements; no inverse rotation needed.
+           Matches GPU turbo4_dequant_element: CENTROIDS_4BIT[idx] * norm. */
         float * dst = y + block * d;
-        matvec(turbo_rotation_t, rotated, dst, d);
-        for (int i = 0; i < d; i++) dst[i] *= norm;
+        for (int i = 0; i < d; i++) dst[i] = rotated[i] * norm;
     }
 #else
     /* Legacy 3-bit + QJL dequant */
