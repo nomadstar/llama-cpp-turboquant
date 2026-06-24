@@ -1,14 +1,305 @@
-# llama.cpp
+# llama.cpp + TurboQuant+
 
-![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
+> KV-cache compression for llama.cpp with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan. TriAttention and PagedAttention Phase 1 are functional.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
-[![Server](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
+[![Status: WIP](https://img.shields.io/badge/status-work--in--progress-yellow.svg)](https://github.com/TheTom/llama-cpp-turboquant)
+[![Codec papers](https://img.shields.io/badge/codec-turboquant__plus-orange.svg)](https://github.com/TheTom/turboquant_plus)
 
-[Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
+A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) targeting three KV cache optimization layers. Current status:
 
-LLM inference in C/C++
+| Feature | Status | Notes |
+|---|---|---|
+| **TurboQuant+** | Partial | Works via `--cache-type-k/v turbo*`. Known bug: `sinks=1` + turbo3 + logit_softcap produces wrong results on CUDA. |
+| **TriAttention** | Active | CLI flags wired. Requires a per-model `.triattention` calibration file (see usage below). |
+| **PagedAttention** | **Functional (Phase 1)** | Gather-before-FA with dynamic page allocation, page-table indirection, and `LLAMA_NO_PAGING` env-var gate. See [design doc](docs/paged-attention-design.md). |
+
+> **Hardware note:** TurboQuant+ KV compression shows meaningful throughput gains at long context (≥16k tokens) on GPUs with ≥16 GB VRAM. On smaller GPUs (≤8 GB), the KV cache fits in memory regardless of quantization at typical context lengths, so the improvement is negligible. The primary benefit is fitting larger models or longer contexts into a given VRAM budget.
+
+### Lineage
+
+TurboQuant+ is inspired by Google's original **TurboQuant** paper (ICLR 2026), which introduced Walsh-Hadamard-rotated polar codebook quantization for KV cache and demonstrated 4.6x compression at ~1% PPL loss. This project extends that foundation substantially -- adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, attention-gated sparse V dequantization, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo4` tier variants, and cross-backend kernel coverage (CUDA `dp4a`, HIP/ROCm RDNA/CDNA, Vulkan coopmat, Metal TurboFlash + V2.1 fused kernels).
+
+This fork is additive: every existing llama.cpp quantization, model, and backend continues to work unchanged. New types are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces.
+
+## Production deployments
+
+This fork's TurboQuant integration is used in:
+
+- [**LocalAI**](https://localai.io) — drop-in OpenAI-compatible local inference server
+- [**Chronara**](https://chronara.io) — quantum-safe fintech infrastructure with AI-driven networks
+- [**AtomicChat**](https://atomic.chat/) — on-device chat application
+- and other downstream projects
+
+## Status
+
+| | |
+|---|---|
+| Default branch | `feature/supermerge` |
+| Commits ahead of upstream | ~400 |
+| Upstream tracking | continuous sync from `ggml-org/llama.cpp` master |
+| Upstream PR status | not yet upstreamed; running as a long-lived feature branch |
+
+---
+
+## What this fork adds
+
+### Quantization types
+
+| Type | Domain | Approx. bits | Notes | Paper |
+|---|---|---|---|---|
+| `TQ3_1S` | weights | ~3.5 | smaller VRAM than `q8_0` | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
+| `TQ4_1S` | weights | ~4.5 | V2.1 fused Metal kernels; CUDA `dp4a` 3.5× faster (240 t/s vs 68 baseline) | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
+| `turbo2` | KV cache | ~2.0 | aggressive; pair with Boundary V | [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md) |
+| `turbo3` | KV cache | ~3.5 | ~4.6× compression at <1.5% PPL loss | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
+| `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
+
+All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
+
+### Compression policies
+
+- **Auto-asymmetric K/V compression** — recognizes that V tolerates aggressive compression while K does not; default policy picks complementary codecs rather than symmetric. [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)
+- **Boundary V (experimental, layer-aware)** — auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization degrades quality, leaves the rest at full aggression. [layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md)
+- **Sparse V dequantization** — skip V dequantization for positions whose softmax attention weight falls below threshold. Enabled across all Metal targets. [sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)
+
+### Backend coverage
+
+| Backend | Quant kernels | Flash Attention | Notes |
+|---|---|---|---|
+| **Metal** (Apple Silicon) | TQ V2.1 fused, TurboFlash | Yes — sparse V across the family; `dk=512` FA kernels for Gemma 4 | TurboFlash off by default on Apple10 (corruption regression under investigation). [m5-max-stress-test](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/m5-max-stress-test.md) |
+| **CUDA** (NVIDIA) | `dp4a` for `TQ4_1S`, warp-cooperative dequant (16× less compute per block), multi-token / multi-GPU | Yes — turbo VEC FA (+9% decode); mixed `f16/bf16 + q8_0` without `GGML_CUDA_FA_ALL_QUANTS`; turbo-specific LUT scoring optimization | Load-time `TQ4_1S → q8_0` conversion path |
+| **HIP / ROCm** (AMD) | Portable `ggml_cuda_dp4a`; scalar half path for `TQ4_1S` on AMD | Yes — VEC FA forced for quantized KV; pool bypass for FA f16 temp buffers | RDNA3 (gfx1100), RDNA4, CDNA3 (MI300X / gfx942), CDNA4 (MI355X / gfx950). [cross-engine-mi300x](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/cross-engine-mi300x.md) |
+| **Vulkan** | `TQ4_1S` weights, `SET_ROWS` for `turbo2`/`turbo4` | coopmat flash attention with `turbo3` KV | Compute-shader path; nix-buildable |
+
+### Model-family support
+
+- **Gemma 4** — `dk=512` Metal FA kernels, MoE token routing, op-concurrency handling
+- **Large MoE** — kernel instantiations for up to 256-expert routing
+- **Hybrid architectures (GDN, Mamba)** — speculative decoding cherry-picked from upstream feature branches
+- All existing llama.cpp model families remain fully supported
+
+### Operational fixes carried by this fork
+
+- CPU `vec_dot` heap-allocation fix for turbo / TQ types at `n > 4096`
+- Apple Silicon unified-memory explosion fix
+- RPC `GGML_OP_COUNT` assertion fix
+- Cross-vendor `-Werror` build fixes
+- Defensive `xxd.cmake` handling for missing input files
+
+---
+
+## Quick start
+
+Standard llama.cpp build flags. TurboQuant types become available automatically once the matching backend is compiled in.
+
+```bash
+# Apple Silicon (Metal)
+cmake -B build -DGGML_METAL=ON && cmake --build build -j
+
+# NVIDIA CUDA
+cmake -B build -DGGML_CUDA=ON && cmake --build build -j
+
+# AMD HIP / ROCm (multi-arch fat binary)
+cmake -B build -DGGML_HIP=ON -DCMAKE_HIP_ARCHITECTURES="gfx1100;gfx942;gfx950" && cmake --build build -j
+
+# Vulkan
+cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
+```
+
+## Usage
+
+### KV-cache quantization (runtime)
+
+KV-cache types are selected per-side via the standard `--cache-type-k` / `--cache-type-v` flags.
+
+> **Start light, then compress.** Some model families — small models, certain MoE configurations, quant-sensitive instruction-tuned variants — are more delicate than others. Pick a light asymmetric configuration first, verify output quality (eyeball + PPL on a hold-out set) on your specific model, then ratchet up V aggression if you have memory headroom to gain. **Do not start at maximum compression** and work backwards.
+
+The core finding from the asymmetric-kv-compression paper — [**Asymmetric K/V Cache Compression: Why V is Free and K is Everything**](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) — drives all the configs below: **V tolerates aggressive compression, K does not**. Always keep K at higher precision than V; never start symmetric. That paper documents the specific failure modes you'll hit if you ignore this and compress K aggressively (PPL blow-up on certain model families, attention-rotation interaction with low-bit K, etc.) — read it before considering step 6.
+
+Higher turbo number = more bits per element = less aggressive compression. The V-side compression ladder is `turbo4` (lightest) → `turbo3` → `turbo2` (heaviest). On the K side, prefer `f16` or `q8_0`; never lead with a turbo K.
+
+Recommendations, ordered from most conservative to most aggressive:
+
+| Step | `--cache-type-k` | `--cache-type-v` | When | Notes |
+|---|---|---|---|---|
+| **1. Safest start** | `f16` | `turbo4` | First contact with any new model | K untouched, V at the lightest turbo tier. If output isn't faithful at this step, the model is unusually quant-sensitive — stop and investigate before escalating. |
+| **2. Conservative** | `q8_0` | `turbo4` | Verified safe at step 1, want a memory win without much risk | Light on both sides. Typically near-indistinguishable from `f16`/`f16` outputs. |
+| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models, most production workloads | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6× compressed V. Total KV ~3-4× smaller than `f16`/`f16`. |
+| **4. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, after validating quality at step 3 | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
+| **5. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
+| **6. Discouraged: symmetric K compression** | any `turbo*` | any `turbo*` | Only with model-specific quality validation in hand | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a starting point. |
+
+Example invocations:
+
+```bash
+# Step 1 — safest start (first contact with a new model)
+llama-cli -m model.gguf --cache-type-k f16 --cache-type-v turbo4 -p "..."
+
+# Step 3 — recommended default (asymmetric turbo)
+llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo3 -p "..."
+
+# Step 4 — aggressive V at long context
+llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo2 -c 131072 -p "..."
+```
+
+If output quality drops between steps, walk back to the previous step. The compression frontier is per-model — there is no global "best" setting.
+
+### Weight quantization (offline)
+
+Weight quantization is selected at conversion time via `llama-quantize`:
+
+```bash
+# TQ4_1S — recommended for most CUDA / HIP deployments (dp4a 3.5× faster than baseline)
+llama-quantize model.f16.gguf model.tq4_1s.gguf TQ4_1S
+
+# TQ3_1S — smaller, accept ~1-2 PPL bump
+llama-quantize model.f16.gguf model.tq3_1s.gguf TQ3_1S
+```
+
+### Automatic behavior
+
+The following activate based on the selected types — no flags required:
+
+- **Auto-asymmetric K/V** — when both sides are turbo / TQ types, the policy picks complementary configurations rather than symmetric.
+- **Boundary V (layer-aware)** — auto-enables for any `turbo2-V` selection.
+- **Sparse V dequantization** — on Metal targets, sparse V activates for all turbo V types.
+- **Flash Attention** — auto-enabled for turbo KV with the relevant backend kernel.
+- **PagedAttention** — auto-enabled for V cache when `v_trans==false` (FA path); disable with `LLAMA_NO_PAGING=1`.
+
+See the linked papers above for parameter selection guidance on a per-model basis.
+
+## Usage
+
+### TriAttention KV cache eviction
+
+Based on [arXiv:2604.04921](https://arxiv.org/abs/2604.04921). Scores token importance using RoPE-inverted key vectors and evicts low-value positions to maintain a fixed memory budget. No attention weights needed — works alongside TurboQuant compression.
+
+**Step 1 — generate calibration file** (one-time per model, any coherent text up to ~32K tokens works):
+
+Requires Python dependencies: `pip install torch transformers numpy accelerate datasets`
+
+You can use any standard text as a corpus. For example, to use Wikitext-2:
+```bash
+wget https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip
+unzip wikitext-2-raw-v1.zip && mv wikitext-2-raw/wiki.test.raw corpus.txt
+```
+
+```bash
+python3 scripts/calibrate-triattention.py \
+    --model <hf-repo-id> \
+    --corpus corpus.txt \
+    --output model.triattention \
+    --vram-gb 3 \
+    --ram-gb 20
+```
+
+**Step 2 — run with eviction:**
+
+```bash
+llama-cli -m model.gguf \
+  --triattention-stats model.triattention \
+  --triattention-budget 2048 \
+  --cache-type-k q8_0 --cache-type-v turbo3 \
+  -c 131072 -p "..."
+```
+
+Key flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--triattention-stats PATH` | — | Calibration file (required to enable) |
+| `--triattention-budget N` | 2048 | Max KV positions retained after pruning |
+| `--triattention-window N` | 128 | Pruning interval in decode tokens |
+| `--triattention-offset-max N` | 65536 | Max geometric offset for scoring |
+| `--triattention-mode MODE` | global | Pruning granularity: `global`, `per-kv-head`, `per-layer-head` |
+| `--triattention-trigger MODE` | interval | Pruning trigger: `interval`, `slack` |
+| `--triattention-agg MODE` | mean | Score aggregation: `mean`, `max` |
+| `--triattention-seed N` | 0 | RNG seed for tie-breaking noise (-1 to disable) |
+| `--triattention-normalize` | — | Z-score normalize scores per head before ranking |
+| `--triattention-no-protect-prefill` | — | Allow evicting prompt tokens (default: protected) |
+| `--triattention-disable-mlr` | — | Ablation: disable MLR frequency weighting |
+| `--triattention-disable-trig` | — | Ablation: use norm-only scoring (no trigonometric component) |
+| `--triattention-log` | — | Print pruning events to stderr |
+
+## PagedAttention (Phase 1 — Functional)
+
+PagedAttention (Kwon et al. 2023, arXiv:2309.06180) is integrated using a **gather-before-FlashAttention** approach. No existing FA kernels were modified — a new `GGML_OP_GATHER_PAGED_V` op gathers non-contiguous KV pages into a contiguous buffer before FA runs.
+
+### How it works
+
+- **V cache only** — K continues to use the flat contiguous layout. V benefits most from paging because FlashAttention reads V by token index with a non-sequential access pattern.
+- **Page table** — `pg_page_table[stream][lpage] → pblock` maps logical pages to physical blocks. Entries start as `-1` (unmapped) and are populated lazily on first write.
+- **Block pool** — `pg_free_blocks` LIFO stack. Total physical blocks = `pages_per_stream × n_stream`. Block size = 32 tokens (aligned to `QK_TURBO3=32`).
+- **Lazy allocation** — pages are allocated on demand via `pg_alloc_for_sinfo()` after each ubatch application.
+- **Write path** — `set_input_v_idxs` translates logical cell → `pblock * block_size + within` via the page table. The `ggml_set_rows` CUDA kernel sees a flat integer row index — no kernel changes needed.
+- **Gather kernel** — `paged_gather_v_kernel` (~50 lines CUDA) copies `n_kv` rows per stream from the pageable pool into a contiguous output buffer, one CUDA block per output row. CPU fallback in `ggml-cpu.c`.
+- **Read path** — the compute graph emits `ggml_gather_paged_v(v_pool, page_table, n_kv, block_size)` followed by `ggml_flash_attn_ext(q, k, gathered_v, ...)`. The gathered V is contiguous with uniform stride — FA sees no difference from the legacy path.
+
+### Graph integration
+
+```
+q_cur ──►
+k_cur ──► cpy_k ──► get_k ──►
+v_cur ──► cpy_v ──► V pool ──► gather_paged_v ──► reshape ──► flash_attn_ext
+                      ▲
+page_table ───────────┘
+```
+
+### Configuration
+
+- **Auto-enabled** — PagedAttention activates automatically when `v_trans==false` (FlashAttention path) and `LLAMA_NO_PAGING` is not set.
+- **Disable** — `LLAMA_NO_PAGING=1` reverts to the legacy contiguous KV cache layout. Useful for debugging or backends that do not support `GGML_OP_GATHER_PAGED_V`.
+- **Page block size** — currently hard-coded at 32 tokens, aligned to TurboQuant's `QK_TURBO3`.
+
+### Write path details
+
+`set_input_v_idxs` computes physical row indices:
+```cpp
+const uint32_t lpage  = cell_idx / pg_block_size;
+const uint32_t within = cell_idx % pg_block_size;
+const int32_t  pblock = pg_page_table[strm][lpage];
+data[...] = (int64_t)pblock * pg_block_size + within;
+```
+
+### Known limitations (Phase 1)
+
+- **Gather overhead** — the gather kernel adds O(n_kv) memory traffic per layer per forward pass. Phase 2 will eliminate this by integrating page-table lookup directly into the FA kernel.
+- **No ref-counting** — `seq_rm()` scans all cells in a page range and only frees the physical block if every cell is empty. Explicit ref-counting is planned for Phase 2.
+- **No prefix sharing** — multiple sequences with shared prefixes cannot share physical blocks. Planned for Phase 2.
+- **K cache not paged** — only V uses paged allocation.
+
+### Design document
+
+See [docs/paged-attention-design.md](docs/paged-attention-design.md) for the full architecture review, including Phase 2 (native paged FA) and Phase 3 (TurboQuant-aware blocks) plans.
+
+## Latest optimizations
+
+### Turbo-specific LUT scoring in Flash Attention
+
+The Flash Attention VEC kernel on CUDA now uses turbo-type-aware LUT scoring for the attention-weight computation path. The kernel selects the optimal lookup-table strategy based on the turbo quantization type (`turbo2`/`turbo3`/`turbo4`), and thread distribution is tuned per type to balance dequantization throughput with attention-matrix arithmetic. This yields extra decode performance beyond the existing sparse-V and mixed-precision optimizations.
+
+### PagedAttention Phase 1 stabilization
+
+The initial PagedAttention implementation (gather-before-FA with dynamic page allocation) underwent multiple stabilization fixes:
+
+- **Device sync** — `cudaMemcpyAsync` with `cudaMemcpyDefault` for page-table upload; explicit `cudaDeviceSynchronize` before `buffer_clear` to eliminate paged-KV stream races.
+- **CPU fallback** — `GATHER_PAGED_V` CPU fallback correctly reads GPU memory by uploading the page table to the device before copy.
+- **K-cache isolation** — K cache uses flat pool indices even when paging is enabled, ensuring K writes are never routed through the page table.
+- **FA auto-disable integration** — when FlashAttention is auto-disabled (e.g., unsupported head dimension), paging is also disabled since the SDPA path requires `v_trans=true`, which is incompatible.
+
+## Known bug: TurboQuant+ sinks + logit_softcap
+
+Combining `sinks=1`, turbo3 KV cache, and a model with `logit_softcap` (Gemma family) produces wrong results in the CUDA `FLASH_ATTN_EXT` path. Workaround: do not use `sinks` with turbo3 KV on CUDA with Gemma-style models.
+
+## Citation
+
+If this fork or any of its quantization types is used in your work, please cite the corresponding paper from the [TurboQuant+ paper corpus](https://github.com/TheTom/turboquant_plus/tree/main/docs/papers).
+
+## License
+
+MIT, same as upstream llama.cpp.
+
+---
 
 ## Recent API changes
 
@@ -27,6 +318,7 @@ LLM inference in C/C++
 - Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
 - Hugging Face Inference Endpoints now support GGUF out of the box! https://github.com/ggml-org/llama.cpp/discussions/9669
 - Hugging Face GGUF editor: [discussion](https://github.com/ggml-org/llama.cpp/discussions/9268) | [tool](https://huggingface.co/spaces/CISCai/gguf-editor)
+- WebGPU support is now available in the browser, see a blog/demo introducing it [here](https://reeselevine.github.io/llamas-on-the-web/).
 
 ----
 
@@ -142,6 +434,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2-686d721927015b2ad73eaa38)
 - [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
 - [x] [BailingMoeV2 (Ring/Ling 2.0) models](https://huggingface.co/collections/inclusionAI/ling-v2-68bf1dd2fc34c306c1fa6f86)
+- [x] [Mellum models](https://huggingface.co/JetBrains/models?search=mellum)
 
 #### Multimodal
 
@@ -172,6 +465,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - JavaScript/Wasm (works in browser): [tangledgroup/llama-cpp-wasm](https://github.com/tangledgroup/llama-cpp-wasm)
 - Typescript/Wasm (nicer API, available on npm): [ngxson/wllama](https://github.com/ngxson/wllama)
 - Ruby: [yoshoku/llama_cpp.rb](https://github.com/yoshoku/llama_cpp.rb)
+- Ruby: [docusealco/rllama](https://github.com/docusealco/rllama)
 - Rust (more features): [edgenai/llama_cpp-rs](https://github.com/edgenai/llama_cpp-rs)
 - Rust (nicer API): [mdrokz/rust-llama.cpp](https://github.com/mdrokz/rust-llama.cpp)
 - Rust (more direct bindings): [utilityai/llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
@@ -279,7 +573,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [Metal](docs/build.md#metal-build) | Apple Silicon |
 | [BLAS](docs/build.md#blas-build) | All |
 | [BLIS](docs/backend/BLIS.md) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel and Nvidia GPU |
+| [SYCL](docs/backend/SYCL.md) | Intel GPU |
 | [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
 | [MUSA](docs/build.md#musa) | Moore Threads GPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
@@ -289,7 +583,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 | [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [WebGPU [In Progress]](docs/build.md#webgpu) | All |
+| [WebGPU](docs/build.md#webgpu) | All |
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 | [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
@@ -529,6 +823,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
 - [Build on Android](docs/android.md)
+- [Multi-GPU usage](docs/multi-gpu.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
