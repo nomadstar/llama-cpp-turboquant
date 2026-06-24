@@ -1563,24 +1563,12 @@ void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ub
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     int64_t * data = (int64_t *) dst->data;
 
-    if (pg_enabled) {
-        for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-            const uint32_t strm = sinfo.strm[s];
-            for (uint32_t i = 0; i < sinfo.size(); ++i) {
-                const uint32_t cell_idx = sinfo.idxs[s][i];
-                const uint32_t lpage    = cell_idx / pg_block_size;
-                const uint32_t within   = cell_idx % pg_block_size;
-                const int32_t  pblock   = pg_page_table[strm][lpage];
-                GGML_ASSERT(pblock >= 0 && "PagedAttention: page not allocated when writing K idx");
-                data[s*sinfo.size() + i] = (int64_t)pblock * pg_block_size + within;
-            }
-        }
-    } else {
-        for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-            const int64_t offs = sinfo.strm[s]*get_size();
-            for (uint32_t i = 0; i < sinfo.size(); ++i) {
-                data[s*sinfo.size() + i] = offs + sinfo.idxs[s][i];
-            }
+    // K always uses the flat pool layout (get_k reads flat, no gather for K).
+    // Even when paging is enabled, K indices must be flat (stream * kv_size + cell).
+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+        const int64_t offs = sinfo.strm[s]*get_size();
+        for (uint32_t i = 0; i < sinfo.size(); ++i) {
+            data[s*sinfo.size() + i] = offs + sinfo.idxs[s][i];
         }
     }
 }
@@ -1604,6 +1592,20 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
                     GGML_ASSERT(pblock >= 0 && "PagedAttention: page not allocated when writing V idx");
                     data[s*sinfo.size() + i] = (int64_t)pblock * pg_block_size + within;
                 }
+            }
+            // [DIAG-VIDXS] print first and last few entries per stream
+            {
+                static int s_vidxs_call = 0;
+                fprintf(stderr, "[VIDXS#%d] ns=%zu size=%zu: ", s_vidxs_call++,
+                        sinfo.n_stream(), sinfo.size());
+                for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+                    fprintf(stderr, "strm%u=[", s);
+                    for (uint32_t i = 0; i < std::min((uint32_t)4, (uint32_t)sinfo.size()); ++i) {
+                        fprintf(stderr, "%lld,", (long long)data[s*sinfo.size()+i]);
+                    }
+                    fprintf(stderr, "...%lld] ", (long long)data[s*sinfo.size()+sinfo.size()-1]);
+                }
+                fprintf(stderr, "\n");
             }
         } else {
             for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
