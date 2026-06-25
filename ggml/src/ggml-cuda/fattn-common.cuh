@@ -1241,6 +1241,9 @@ void launch_fattn(
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
 
     const char * K_data = (const char *) K->data;
+#if defined(TURBO_DIAG_K_TILE)
+    const char * K_data_orig = K_data;
+#endif
     size_t nb11 = K->nb[1];
     size_t nb12 = K->nb[2];
     size_t nb13 = K->nb[3];
@@ -1251,6 +1254,10 @@ void launch_fattn(
     size_t nb23 = V->nb[3];
 
     if (need_f16_K && K->type != GGML_TYPE_F16) {
+#if defined(TURBO_DIAG_K_TILE)
+        fprintf(stderr, "[TURBO_ENTER_DEQUANT_K] type=%s ne=[%lld,%lld,%lld,%lld] need_f16=%d\n",
+                ggml_type_name(K->type), (long long)K->ne[0], (long long)K->ne[1], (long long)K->ne[2], (long long)K->ne[3], (int)need_f16_K);
+#endif
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
@@ -1321,6 +1328,27 @@ void launch_fattn(
 #endif
     }
 
+#if defined(TURBO_DIAG_KQ)
+    // For F16 K baseline: read first 8 K elements directly (no dequant needed)
+    if (!need_f16_K && K->type == GGML_TYPE_F16) {
+        static int s_f16_count = 0;
+        if (s_f16_count++ < 3) {
+            CUDA_CHECK(cudaStreamSynchronize(main_stream));
+            half K_f16_raw[8];
+            CUDA_CHECK(cudaMemcpy(K_f16_raw, K->data, sizeof(K_f16_raw), cudaMemcpyDeviceToHost));
+            double k_l2_partial = 0.0;
+            half K_128[128];
+            CUDA_CHECK(cudaMemcpy(K_128, K->data, sizeof(K_128), cudaMemcpyDeviceToHost));
+            for (int _i = 0; _i < 128; _i++) k_l2_partial += (double)__half2float(K_128[_i]) * __half2float(K_128[_i]);
+            fprintf(stderr, "[F16_K_DIAG] s=%d K_l2=%.4g K_first8: %g %g %g %g %g %g %g %g\n",
+                    s_f16_count-1, sqrt(k_l2_partial),
+                    __half2float(K_f16_raw[0]), __half2float(K_f16_raw[1]),
+                    __half2float(K_f16_raw[2]), __half2float(K_f16_raw[3]),
+                    __half2float(K_f16_raw[4]), __half2float(K_f16_raw[5]),
+                    __half2float(K_f16_raw[6]), __half2float(K_f16_raw[7]));
+        }
+    }
+#endif
     if (need_f16_V && V->type != GGML_TYPE_F16) {
         if (V_is_K_view) {
             V_data = K_data;
@@ -1487,6 +1515,84 @@ void launch_fattn(
     // TODO other tensor dimensions after removal of WMMA kernel:
     const uint3 ne01 = init_fastdiv_values(Q->ne[1]);
 
+#if defined(TURBO_DIAG_K_TILE)
+    if (K->type == GGML_TYPE_TURBO3_0 && need_f16_K) {
+        cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+        CUDA_CHECK(cudaStreamIsCapturing(main_stream, &capture_status));
+        if (capture_status == cudaStreamCaptureStatusNone) {
+
+        static constexpr float turbo3_centroids_host[8] = {
+            -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+             0.021460f,  0.065717f,  0.117832f,  0.190685f
+        };
+
+        const int gqa_ratio_diag    = Q->ne[2] / K->ne[2];
+        const int iter_k_diag       = (K->ne[1] + (nbatch_fa - 1)) / nbatch_fa;
+        const int iter_j_diag       = (Q->ne[1] + (ncols1    - 1)) / ncols1;
+        const int iter_z_gqa_diag   = (gqa_ratio_diag + (ncols2 - 1)) / ncols2;
+        const int64_t kbc_diag      = int64_t(0)*(iter_k_diag*iter_j_diag*iter_z_gqa_diag*K->ne[2]*Q->ne[3]) / blocks_num.x;
+        const int kb0_start_diag    = kbc_diag % iter_k_diag;
+        const int sequence_diag     = kbc_diag /(iter_k_diag*iter_j_diag*iter_z_gqa_diag*K->ne[2]);
+        const int head_diag         = (kbc_diag - int64_t(iter_k_diag)*iter_j_diag*iter_z_gqa_diag*K->ne[2]*sequence_diag)/(iter_k_diag*iter_j_diag*iter_z_gqa_diag);
+        const int zt_gqa_diag       = (kbc_diag - int64_t(iter_k_diag)*iter_j_diag*iter_z_gqa_diag*K->ne[2]*sequence_diag - int64_t(iter_k_diag)*iter_j_diag*iter_z_gqa_diag*head_diag)/(iter_k_diag*iter_j_diag);
+        const int jt_diag           = (kbc_diag - int64_t(iter_k_diag)*iter_j_diag*iter_z_gqa_diag*K->ne[2]*sequence_diag - int64_t(iter_k_diag)*iter_j_diag*iter_z_gqa_diag*head_diag - int64_t(iter_k_diag)*iter_j_diag*zt_gqa_diag) / iter_k_diag;
+        const int kv_index_diag     = kb0_start_diag * nbatch_fa;
+        const int block_index_diag  = 0;
+
+        int layer_diag = -1;
+        sscanf(K->name, "cache_k_l%d", &layer_diag);
+
+        const char * blk_dev  = K_data_orig + K->nb[3]*sequence_diag + K->nb[2]*head_diag + K->nb[1]*kv_index_diag + sizeof(block_turbo3_0)*block_index_diag;
+        const char * tile_dev = K_data      + nb13*sequence_diag    + nb12*head_diag    + nb11*kv_index_diag    + sizeof(half)*QK_TURBO3*block_index_diag;
+
+        block_turbo3_0 blk_host;
+        half k_gpu[QK_TURBO3];
+        CUDA_CHECK(cudaMemcpyAsync(&blk_host, blk_dev, sizeof(blk_host), cudaMemcpyDeviceToHost, main_stream));
+        CUDA_CHECK(cudaMemcpyAsync(k_gpu, tile_dev, sizeof(k_gpu), cudaMemcpyDeviceToHost, main_stream));
+        CUDA_CHECK(cudaStreamSynchronize(main_stream));
+
+        const float norm = __half2float(blk_host.norm);
+        float k_cpu[QK_TURBO3];
+        for (int j = 0; j < QK_TURBO3; ++j) {
+            const uint8_t low2 = (blk_host.qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+            const uint8_t hi1  = (blk_host.signs[j / 8] >> (j % 8)) & 0x1;
+            const uint8_t idx  = low2 | (hi1 << 2);
+            k_cpu[j] = __half2float(__float2half(turbo3_centroids_host[idx] * norm));
+        }
+
+        double max_abs = 0.0;
+        double rms = 0.0;
+        int first_mismatch = -1;
+        for (int j = 0; j < QK_TURBO3; ++j) {
+            const double err = fabs((double)__half2float(k_gpu[j]) - (double)k_cpu[j]);
+            rms += err * err;
+            if (err > max_abs) {
+                max_abs = err;
+            }
+            if (first_mismatch < 0 && err >= 1e-4) {
+                first_mismatch = j;
+            }
+        }
+        rms = sqrt(rms / QK_TURBO3);
+
+        fprintf(stderr,
+                "[TURBO_DIAG_K_TILE] layer=%d head=%d kv_index=%d block_index=%d original_block=%p fp16_tile=%p jt=%d norm=%g max_abs=%.9g rms=%.9g first_mismatch=%d\n",
+                layer_diag, head_diag, kv_index_diag, block_index_diag, (const void *) blk_dev, (const void *) tile_dev,
+                jt_diag, norm, max_abs, rms, first_mismatch);
+        if (first_mismatch >= 0) {
+            const int j = first_mismatch;
+            const uint8_t low2 = (blk_host.qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+            const uint8_t hi1  = (blk_host.signs[j / 8] >> (j % 8)) & 0x1;
+            const uint8_t idx  = low2 | (hi1 << 2);
+            fprintf(stderr,
+                    "[TURBO_DIAG_K_TILE] mismatch j=%d cpu=%g gpu=%g idx=%u\n",
+                    j, k_cpu[j], __half2float(k_gpu[j]), (unsigned) idx);
+        }
+        GGML_ASSERT(max_abs < 1e-4f);
+        }
+    }
+#endif
+
     GGML_ASSERT(block_dim.x % warp_size == 0);
     fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
         (const char *) Q->data,
@@ -1504,6 +1610,56 @@ void launch_fattn(
         mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
     );
     CUDA_CHECK(cudaGetLastError());
+
+#if defined(TURBO_DIAG_KQ)
+    // CPU-side diagnostic: for K=turbo3 VEC path, verify KQ dot product after first kernel call.
+    if (!need_f16_K && K->type == GGML_TYPE_TURBO3_0) {
+        static int s_vec_count = 0;
+        if (s_vec_count++ < 1) {
+            CUDA_CHECK(cudaStreamSynchronize(main_stream));
+            // Read K block 0 (first KV position, head 0) from device
+            block_turbo3_0 blk0;
+            CUDA_CHECK(cudaMemcpy(&blk0, K->data, sizeof(blk0), cudaMemcpyDeviceToHost));
+            // Read Q head 0 (first 128 floats = 64 float2) from device
+            float Q_h[128];
+            CUDA_CHECK(cudaMemcpy(Q_h, Q->data, sizeof(Q_h), cudaMemcpyDeviceToHost));
+            // Manually dequantize K block 0
+            float K_dequant[128];
+            float kblk_norm = __half2float(blk0.norm);
+            for (int j = 0; j < 128; j++) {
+                uint8_t low2 = (blk0.qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+                uint8_t hi1  = (blk0.signs[j / 8] >> (j % 8)) & 0x1;
+                uint8_t idx  = low2 | (hi1 << 2);
+                static const float C[8] = {-0.190685f, -0.117832f, -0.065717f, -0.021460f,
+                                            0.021460f,  0.065717f,  0.117832f,  0.190685f};
+                K_dequant[j] = C[idx] * kblk_norm;
+            }
+            // Compute dot product Q_h · K_dequant
+            double dot_cpu = 0.0;
+            double q_l2 = 0.0, k_l2 = 0.0;
+            for (int j = 0; j < 128; j++) {
+                dot_cpu += (double)Q_h[j] * K_dequant[j];
+                q_l2 += (double)Q_h[j] * Q_h[j];
+                k_l2 += (double)K_dequant[j] * K_dequant[j];
+            }
+            // Read attention output for head 0 (first 128 floats of KQV)
+            float out_h[128];
+            CUDA_CHECK(cudaMemcpy(out_h, KQV->data, sizeof(out_h), cudaMemcpyDeviceToHost));
+            fprintf(stderr, "[VEC_KQ_CPU_DIAG] K_ne=[%lld,%lld,%lld] Q_ne=[%lld,%lld,%lld] "
+                    "kblk_norm=%g K_l2=%.4g Q_l2=%.4g dot_cpu=%.6g "
+                    "K_dq8=(%g %g %g %g %g %g %g %g) Q8=(%g %g %g %g %g %g %g %g) "
+                    "out8=(%g %g %g %g %g %g %g %g)\n",
+                    (long long)K->ne[0], (long long)K->ne[1], (long long)K->ne[2],
+                    (long long)Q->ne[0], (long long)Q->ne[1], (long long)Q->ne[2],
+                    kblk_norm, sqrt(k_l2), sqrt(q_l2), dot_cpu,
+                    K_dequant[0], K_dequant[1], K_dequant[2], K_dequant[3],
+                    K_dequant[4], K_dequant[5], K_dequant[6], K_dequant[7],
+                    Q_h[0], Q_h[1], Q_h[2], Q_h[3], Q_h[4], Q_h[5], Q_h[6], Q_h[7],
+                    out_h[0], out_h[1], out_h[2], out_h[3],
+                    out_h[4], out_h[5], out_h[6], out_h[7]);
+        }
+    }
+#endif
 
     if (stream_k) {
         if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.

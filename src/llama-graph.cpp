@@ -2102,6 +2102,12 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+#if defined(TURBO_DIAG_KQ)
+    fprintf(stderr, "[TURBO_BUILD_ATTN] il=%d k_type=%s k_ne=[%lld,%lld,%lld,%lld] q_ne=[%lld,%lld,%lld,%lld]\n",
+            il, ggml_type_name(k->type),
+            (long long)k->ne[0], (long long)k->ne[1], (long long)k->ne[2], (long long)k->ne[3],
+            (long long)q->ne[0], (long long)q->ne[1], (long long)q->ne[2], (long long)q->ne[3]);
+#endif
     ggml_tensor * v;
     if (inp->self_v_page_table) {
         // PagedAttention Phase 1: gather V rows via page table before FA

@@ -552,6 +552,54 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             __syncthreads();
         }
 
+#if defined(TURBO_DIAG_MMA_K_TILE)
+        if (blockIdx.x == 0 && threadIdx.x == 0 && threadIdx.y == 0 && k_VKQ_0 == 0 && k0_start == 0) {
+            double max_abs = 0.0;
+            int first_i = -1;
+            int first_j = -1;
+            float first_expected = 0.0f;
+            float first_actual = 0.0f;
+            for (int i = 0; i < 16; ++i) {
+                for (int j = 0; j < 8; ++j) {
+                    const float2 expected = __half22float2(K_h2[int64_t(k_VKQ_0 + i)*stride_K + k0_start + j]);
+                    const float2 actual   = __half22float2(tile_K[i*stride_tile_K + j]);
+                    const double err_x = fabs((double) actual.x - (double) expected.x);
+                    const double err_y = fabs((double) actual.y - (double) expected.y);
+                    if (err_x > max_abs) {
+                        max_abs = err_x;
+                        first_i = i;
+                        first_j = 2*j + 0;
+                        first_expected = expected.x;
+                        first_actual = actual.x;
+                    }
+                    if (err_y > max_abs) {
+                        max_abs = err_y;
+                        first_i = i;
+                        first_j = 2*j + 1;
+                        first_expected = expected.y;
+                        first_actual = actual.y;
+                    }
+                }
+            }
+
+            printf("[TURBO_DIAG_MMA_K_TILE] block=(%d,%d,%d) k_VKQ_0=%d k0_start=%d stride_K=%d stride_tile_K=%d shared_vs_global_max_abs=%.9g first_i=%d first_j=%d expected=%g actual=%g\n",
+                   (int) blockIdx.x, (int) blockIdx.y, (int) blockIdx.z, k_VKQ_0, k0_start, stride_K, stride_tile_K,
+                   max_abs, first_i, first_j, first_expected, first_actual);
+
+            printf("[TURBO_DIAG_MMA_K_TILE] ldmatrix_source base=tile_K row_major_rows=KV cols=head_dim/2 T_A_KQ=(I=%d,J=%d) lane0=(row=0,col_h2=0) lane16=(row=0,col_h2=4)\n",
+                   T_A_KQ::I, T_A_KQ::J);
+            printf("[TURBO_DIAG_MMA_K_TILE] tile_row0_h0_15=%g %g %g %g %g %g %g %g %g %g %g %g %g %g %g %g\n",
+                   __half2float(((const half *) tile_K)[0]),  __half2float(((const half *) tile_K)[1]),
+                   __half2float(((const half *) tile_K)[2]),  __half2float(((const half *) tile_K)[3]),
+                   __half2float(((const half *) tile_K)[4]),  __half2float(((const half *) tile_K)[5]),
+                   __half2float(((const half *) tile_K)[6]),  __half2float(((const half *) tile_K)[7]),
+                   __half2float(((const half *) tile_K)[8]),  __half2float(((const half *) tile_K)[9]),
+                   __half2float(((const half *) tile_K)[10]), __half2float(((const half *) tile_K)[11]),
+                   __half2float(((const half *) tile_K)[12]), __half2float(((const half *) tile_K)[13]),
+                   __half2float(((const half *) tile_K)[14]), __half2float(((const half *) tile_K)[15]));
+        }
+#endif
+
         // Calculate tile of KQ:
         if constexpr (Q_in_reg) {
 #pragma unroll

@@ -306,6 +306,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
             CUDA_CHECK(cudaSetDevice(id));
             CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
         }
+#if defined(TURBO_DIAG_KQ)
+        // Increase printf buffer to 256 MB so device-side printf in VEC kernel is visible
+        CUDA_CHECK(cudaSetDevice(id));
+        CUDA_CHECK(cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 256 * 1024 * 1024));
+#endif
 
 #endif  // defined(GGML_USE_HIP)
     }
