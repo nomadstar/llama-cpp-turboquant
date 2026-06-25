@@ -147,7 +147,8 @@ static __global__ void flash_attn_ext_vec(
     // turbo4 excluded: 16 centroids × D exceeds shmem budget.
     // Stride = n_centroids+1 to avoid bank conflicts.
     // Keep the turbo2 LUT path, but leave turbo3 on the original dot-product path.
-    // Turbo3 K-only correctness is the active regression under investigation.
+    // Turbo2 LUT uses 2-bit indices; Turbo3 requires qs[] + signs[]; treating Turbo3 as Turbo2 drops one bit of information;
+    // this caused catastrophic PPL regression; Turbo3 remains on the original vec_dot path until a correct 3-bit LUT is implemented.
     constexpr int n_centroids_lut = (D <= 256 && type_K == GGML_TYPE_TURBO2_0) ? 4 : 0;
     constexpr int lut_stride = n_centroids_lut > 0 ? n_centroids_lut + 1 : 1;
     __shared__ half turbo_lut[n_centroids_lut > 0 ? D : 1][lut_stride];
@@ -253,9 +254,15 @@ static __global__ void flash_attn_ext_vec(
                 }
             }
 #pragma unroll
-            for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
-                Q_reg[j][k] *= scale_h2;
-            }
+                for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
+                    Q_reg[j][k] *= scale_h2;
+                }
+#ifdef TURBO_DIAG_KQ
+                if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && threadIdx.y == 0 && j == 0) {
+                    const float2 q0 = __half22float2(Q_reg[j][0]);
+                    printf("TURBO_DIAG_KQ Q_preproc q0=%g q1=%g\n", q0.x, q0.y);
+                }
+#endif
         }
 #else
 #pragma unroll
@@ -368,6 +375,12 @@ static __global__ void flash_attn_ext_vec(
             KQ_reg[j] = __expf(KQ_reg[j] - KQ_max[j]);
             KQ_sum[j] = KQ_sum[j]*KQ_max_scale + KQ_reg[j];
             if constexpr (!V_is_turbo) { KQ[j*nthreads + tid] = KQ_reg[j]; }
+
+#ifdef TURBO_DIAG_KQ
+            if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && threadIdx.y == 0 && j == 0) {
+                printf("TURBO_DIAG_KQ KQ_write j=%d val=%g max=%g sum=%g\n", j, KQ_reg[j], KQ_max[j], KQ_sum[j]);
+            }
+#endif
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
