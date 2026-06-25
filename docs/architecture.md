@@ -188,7 +188,7 @@ The KV cache (`llama-kv-cache.cpp`) implements:
   to the next multiple of 128. Padding is stripped after inverse WHT on the attention output.
 
 - **Rotation matrices** — Pre-computed WHT-based 128×128 R and R^T matrices loaded into the
-  KV cache buffer from `turbo-rotation-data.h`.
+  KV cache buffer from `src/turbo-rotation-data.h`.
 
 ---
 

@@ -428,9 +428,9 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
-        GGML_TYPE_TURBO3_0 = 41, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
-        GGML_TYPE_TURBO4_0 = 42, // TurboQuant 4-bit KV cache: 3-bit PolarQuant + 1-bit QJL
-        GGML_TYPE_TURBO2_0 = 43, // TurboQuant 2-bit KV cache: 2-bit PolarQuant (no QJL)
+        GGML_TYPE_TURBO3_0 = 41, // TurboQuant 3-bit KV cache: 8-centroid PolarQuant (pure 3-bit)
+        GGML_TYPE_TURBO4_0 = 42, // TurboQuant 4-bit KV cache: 16-centroid PolarQuant (pure 4-bit, default); 3-bit+QJL (legacy)
+        GGML_TYPE_TURBO2_0 = 43, // TurboQuant 2-bit KV cache: 4-centroid PolarQuant, 6.4× compression
         GGML_TYPE_COUNT   = 44,
     };
 
