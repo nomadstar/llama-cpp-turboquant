@@ -2255,6 +2255,15 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
         && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
 
+#if defined(TURBO_DIAG_KQ)
+    if (src0->type == GGML_TYPE_TURBO3_0) {
+        printf("TURBO_MUL_MAT_DISPATCH src0=%s ne1=%d ne01=%d split=%d badpad=%d\n",
+               ggml_type_name(src0->type),
+               (int)src1->ne[1], (int)src0->ne[1],
+               (int)split, (int)bad_padding_clear);
+    }
+#endif
+
     bool use_mul_mat_vec_f = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)

@@ -257,7 +257,7 @@ static __global__ void flash_attn_ext_vec(
                 for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
                     Q_reg[j][k] *= scale_h2;
                 }
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
                 if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && threadIdx.y == 0 && j == 0) {
                     const float2 q0 = __half22float2(Q_reg[j][0]);
                     printf("TURBO_DIAG_KQ Q_preproc q0=%g q1=%g\n", q0.x, q0.y);
@@ -343,7 +343,7 @@ static __global__ void flash_attn_ext_vec(
                                 __half2float(turbo_lut[d0+7][(qs1>>6)&3])) * norm;
                     }
                 } else {
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
                     if constexpr (type_K == GGML_TYPE_TURBO3_0) {
                         if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && threadIdx.y == 0 && j == 0) {
                             printf("TURBO3_K_DIAG_START flash_attn_ext_vec branch=turbo3 nthreads_KQ=%d\n", nthreads_KQ);
@@ -351,7 +351,7 @@ static __global__ void flash_attn_ext_vec(
                     }
 #endif
                     sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
                     if constexpr (type_K == GGML_TYPE_TURBO3_0) {
                         if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && threadIdx.y == 0 && j == 0) {
                             printf("TURBO_DIAG_KQ turbo3 sum k-only sum=%g\n", sum);
@@ -390,7 +390,7 @@ static __global__ void flash_attn_ext_vec(
             KQ_sum[j] = KQ_sum[j]*KQ_max_scale + KQ_reg[j];
             if constexpr (!V_is_turbo) { KQ[j*nthreads + tid] = KQ_reg[j]; }
 
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
             if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && threadIdx.y == 0 && j == 0) {
                 printf("TURBO_DIAG_KQ KQ_write j=%d val=%g max=%g sum=%g\n", j, KQ_reg[j], KQ_max[j], KQ_sum[j]);
             }
@@ -854,8 +854,10 @@ static __global__ void flash_attn_ext_vec(
 
 template <int D, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
 void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+#if defined(TURBO_DIAG_KQ)
+    printf("TURBO_VEC_IMPL D=%d cols=%d type_K=%d type_V=%d\n", D, cols_per_block, (int)type_K, (int)type_V);
+#endif
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-
     const int nthreads = ggml_cuda_fattn_vec_get_nthreads_host(cc);
     const int nwarps   = nthreads / WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap>;

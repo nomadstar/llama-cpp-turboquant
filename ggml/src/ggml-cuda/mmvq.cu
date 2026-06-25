@@ -719,6 +719,9 @@ static void mul_mat_vec_q_switch_type(
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
         default:
+#if defined(TURBO_DIAG_KQ)
+            fprintf(stderr, "TURBO_MMVQ_UNSUPPORTED_TYPE %d\n", (int)type_x);
+#endif
             GGML_ABORT("fatal error");
             break;
     }

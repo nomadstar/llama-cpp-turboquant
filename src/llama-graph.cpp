@@ -1811,6 +1811,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     ggml_tensor * cur;
 
     const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+#if defined(TURBO_DIAG_KQ)
+    if (k->type == GGML_TYPE_TURBO3_0) {
+        printf("TURBO_BUILD_ATTN_MHA fa=%d k_type=%s v_type=%s n_tok=%d\n",
+               (int)use_flash_attn, ggml_type_name(k->type), ggml_type_name(v->type), (int)q->ne[1]);
+    }
+#endif
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 

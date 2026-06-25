@@ -591,6 +591,50 @@ static void set_rows_cuda_turbo3(
             s01, s02, s03, s10, s11, s12,
             nb1, nb2, nb3, tail_size);
     }
+
+#if defined(TURBO_DIAG_KQ)
+{
+    static int s_count = 0;
+    if (s_count++ < 40) {
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        block_turbo3_0 blk;
+        // Read full 128-element WHT group (row 0, group 0) to see input magnitude
+        float src_grp0[128];
+        int idx_first4[4];
+        CUDA_CHECK(cudaMemcpy(&blk, dst->data, sizeof(blk), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(src_grp0, src0_d, sizeof(src_grp0), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(idx_first4, src1_d, sizeof(idx_first4), cudaMemcpyDeviceToHost));
+        float g_min = src_grp0[0], g_max = src_grp0[0], g_sumsq = 0.0f;
+        for (int _i = 0; _i < 128; _i++) {
+            float v = src_grp0[_i];
+            if (v < g_min) g_min = v;
+            if (v > g_max) g_max = v;
+            g_sumsq += v * v;
+        }
+        float g_rms = sqrtf(g_sumsq / 128.0f);
+        float g_l2  = sqrtf(g_sumsq);
+        fprintf(stderr, "[DIAG_SETROWS] dst=%s ne00=%lld ne01=%lld "
+                "blk_norm=%g qs[0..7]=0x%02x%02x%02x%02x%02x%02x%02x%02x "
+                "signs[0..3]=0x%02x%02x%02x%02x "
+                "src128_first4=[%g,%g,%g,%g] min=%g max=%g rms=%g l2=%g "
+                "idx_first4=[%d,%d,%d,%d] "
+                "src_ne=[%lld,%lld,%lld,%lld] src_nb=[%zu,%zu,%zu,%zu]\n",
+                dst->name,
+                (long long)dst->ne[0], (long long)dst->ne[1],
+                __half2float(blk.norm),
+                blk.qs[0], blk.qs[1], blk.qs[2], blk.qs[3],
+                blk.qs[4], blk.qs[5], blk.qs[6], blk.qs[7],
+                blk.signs[0], blk.signs[1], blk.signs[2], blk.signs[3],
+                src_grp0[0], src_grp0[1], src_grp0[2], src_grp0[3],
+                g_min, g_max, g_rms, g_l2,
+                idx_first4[0], idx_first4[1], idx_first4[2], idx_first4[3],
+                (long long)src0->ne[0], (long long)src0->ne[1],
+                (long long)src0->ne[2], (long long)src0->ne[3],
+                src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]);
+    }
+}
+#endif
+
 }
 
 // ---- TurboQuant2 set_rows: GROUP_SIZE-element groups with WHT rotation + norm correction ----

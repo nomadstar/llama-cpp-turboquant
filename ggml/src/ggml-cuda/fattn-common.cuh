@@ -6,6 +6,7 @@
 #include "turbo-quant.cuh"
 
 #include <cstdint>
+#include <cuda_fp16.h>
 
 #define FATTN_KQ_STRIDE       256
 #define HALF_MAX_HALF         __float2half(65504.0f/2) // Use neg. of this instead of -INFINITY to initialize KQ max vals to avoid NaN upon subtraction.
@@ -310,9 +311,12 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turbo3_0(
 
     float sum = 0.0f;
 
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
     if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
-        printf("TURBO3_K_DIAG_START norm=%g\n", __half2float(K_turbo[0].norm));
+        printf("TURBO3_KQ_DIAG_START norm=%g qs[0]=0x%02x qs[1]=0x%02x qs[2]=0x%02x signs[0]=0x%02x\n",
+               __half2float(K_turbo[0].norm),
+               (unsigned)K_turbo[0].qs[0], (unsigned)K_turbo[0].qs[1], (unsigned)K_turbo[0].qs[2],
+               (unsigned)K_turbo[0].signs[0]);
     }
 #endif
 
@@ -350,18 +354,19 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turbo3_0(
             sum += kv.x * qv.x + kv.y * qv.y;
 #endif // V_DOT2_F32_F16_AVAILABLE
 
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
             if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0 && k_KQ_0 == 0 && k_KQ_1 == 0) {
-                printf("TURBO_DIAG_KQ turbo3 first norm=%g qs_byte=0x%02x sgn_byte=0x%02x partial_sum=%g\n",
-                       norm, (unsigned) qs_byte, (unsigned) sgn_byte, sum);
+                printf("TURBO3_KQ_DIAG_LOOP ib=%d j0=%d norm=%g qs_byte=0x%02x sgn_byte=0x%02x idx0=%d idx1=%d kv=(%g,%g) partial_sum=%g\n",
+                       ib, j0, norm, (unsigned)qs_byte, (unsigned)sgn_byte,
+                       (int)idx0, (int)idx1, kv.x, kv.y, sum);
             }
 #endif
         }
     }
 
-#if defined(TURBO_DIAG_KQ) && defined(GGML_CUDA)
+#if defined(TURBO_DIAG_KQ)
     if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
-        printf("TURBO_DIAG_KQ turbo3 final sum=%g\n", sum);
+        printf("TURBO3_KQ_DIAG_END final_sum=%g\n", sum);
     }
 #endif
 
@@ -1270,6 +1275,50 @@ void launch_fattn(
             nb13 = K->ne[2] * nb12;
         }
         K_data = (char *) K_f16.ptr;
+
+#if defined(TURBO_DIAG_KQ)
+        {
+            static int s_count = 0;
+            if (s_count++ < 3) {
+                CUDA_CHECK(cudaStreamSynchronize(main_stream));
+                // First 128 elements of K (first KV position, first head)
+                half K_tmp[128];
+                cudaMemcpy(K_tmp, K_f16.ptr, sizeof(K_tmp), cudaMemcpyDeviceToHost);
+                // First 128 floats of Q (first Q token, first head) — Q is float32
+                float Q_tmp[128];
+                cudaMemcpy(Q_tmp, Q->data, sizeof(Q_tmp), cudaMemcpyDeviceToHost);
+                // Manual dot product Q · K for first KV position
+                double dot_manual = 0.0;
+                for (int _i = 0; _i < 128; _i++) {
+                    dot_manual += (double)Q_tmp[_i] * (double)__half2float(K_tmp[_i]);
+                }
+                // Q L2 norm and K L2 norm
+                double q_sumsq = 0.0, k_sumsq = 0.0;
+                for (int _i = 0; _i < 128; _i++) {
+                    q_sumsq += (double)Q_tmp[_i] * Q_tmp[_i];
+                    k_sumsq += (double)__half2float(K_tmp[_i]) * __half2float(K_tmp[_i]);
+                }
+                int orig_contig = ggml_is_contiguously_allocated(K);
+                fprintf(stderr, "[DIAG_KDEQ] s=%d K: ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] "
+                        "nb11(adj)=%zu nb12(adj)=%zu nb13(adj)=%zu "
+                        "contig=%d type=%s nelem=%lld "
+                        "K_first8: %g %g %g %g %g %g %g %g "
+                        "K_l2=%.4g Q_l2=%.4g dot=%.6g "
+                        "Q_first8: %g %g %g %g %g %g %g %g\n",
+                        s_count-1,
+                        (long long)K->ne[0], (long long)K->ne[1], (long long)K->ne[2], (long long)K->ne[3],
+                        K->nb[0], K->nb[1], K->nb[2], K->nb[3],
+                        nb11, nb12, nb13,
+                        orig_contig, ggml_type_name(K->type),
+                        (long long)ggml_nelements(K),
+                        __half2float(K_tmp[0]), __half2float(K_tmp[1]), __half2float(K_tmp[2]), __half2float(K_tmp[3]),
+                        __half2float(K_tmp[4]), __half2float(K_tmp[5]), __half2float(K_tmp[6]), __half2float(K_tmp[7]),
+                        sqrt(k_sumsq), sqrt(q_sumsq), dot_manual,
+                        Q_tmp[0], Q_tmp[1], Q_tmp[2], Q_tmp[3],
+                        Q_tmp[4], Q_tmp[5], Q_tmp[6], Q_tmp[7]);
+            }
+        }
+#endif
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
@@ -1304,6 +1353,30 @@ void launch_fattn(
                 nb23 = V->ne[2] * nb22;
             }
             V_data = (char *) V_f16.ptr;
+
+#if defined(TURBO_DIAG_KQ)
+            {
+                static int s_count = 0;
+                if (s_count++ < 5) {
+                    CUDA_CHECK(cudaStreamSynchronize(main_stream));
+                    half tmp[16];
+                    cudaMemcpy(tmp, V_f16.ptr, sizeof(tmp), cudaMemcpyDeviceToHost);
+                    int orig_contig = ggml_is_contiguously_allocated(V);
+                    fprintf(stderr, "[DIAG_VDEQ] V dequant: ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] "
+                            "contig=%d type=%s nelem=%lld nbytes=%zu "
+                            "first16: %g %g %g %g %g %g %g %g %g %g %g %g %g %g %g %g\n",
+                            (long long)V->ne[0], (long long)V->ne[1], (long long)V->ne[2], (long long)V->ne[3],
+                            V->nb[0], V->nb[1], V->nb[2], V->nb[3],
+                            orig_contig, ggml_type_name(V->type),
+                            (long long)ggml_nelements(V),
+                            (long long)ggml_nbytes(V),
+                            __half2float(tmp[0]), __half2float(tmp[1]), __half2float(tmp[2]), __half2float(tmp[3]),
+                            __half2float(tmp[4]), __half2float(tmp[5]), __half2float(tmp[6]), __half2float(tmp[7]),
+                            __half2float(tmp[8]), __half2float(tmp[9]), __half2float(tmp[10]), __half2float(tmp[11]),
+                            __half2float(tmp[12]), __half2float(tmp[13]), __half2float(tmp[14]), __half2float(tmp[15]));
+                }
+            }
+#endif
         }
     }
 

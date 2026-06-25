@@ -224,6 +224,9 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_CASE(256, type_K, type_V)       \
 
 static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+#if defined(TURBO_DIAG_KQ)
+    printf("TURBO_DIAG_VEC_CALLED K_type=%s V_type=%s Q_ne0=%d Q_ne1=%d\n", ggml_type_name(dst->src[1]->type), ggml_type_name(dst->src[2]->type), dst->src[0]->ne[0], dst->src[0]->ne[1]);
+#endif
     ggml_tensor * Q = dst->src[0];
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
@@ -297,6 +300,10 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     // Mixed turbo3/q8_0 KV cache types
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,     GGML_TYPE_TURBO3_0)
+
+    // Mixed turbo3/f16 KV cache types
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,      GGML_TYPE_TURBO3_0)
 
     // TurboQuant2 KV cache types (always enabled)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO2_0)
@@ -401,7 +408,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     if (K->type != V->type) {
         // Allow mixed turbo KV types (any combination of turbo2, turbo3, q8_0)
         auto is_turbo = [](ggml_type t) {
-            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_Q8_0;
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16;
         };
         if (!is_turbo(K->type) || !is_turbo(V->type)) {
             return BEST_FATTN_KERNEL_NONE;
@@ -466,6 +473,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                     }
                 } else {
                     if (Q->ne[1] == 1) {
+#if defined(TURBO_DIAG_KQ)
+                        printf("TURBO_KERNEL_SELECT VEC L473 cc=%d ne1=%d qk=%s qv=%s\n", cc, Q->ne[1], ggml_type_name(K->type), ggml_type_name(V->type));
+#endif
                         return BEST_FATTN_KERNEL_VEC;
                     }
                 }
@@ -474,6 +484,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_VEC;
             }
         }
+#if defined(TURBO_DIAG_KQ)
+        printf("TURBO_KERNEL_FALLBACK MMA cc=%d ne0=%d ne1=%d can_vec=%d K_nb1=%zu K_ne1=%d\n",
+               cc, Q->ne[0], Q->ne[1], (int)can_use_vector_kernel, K->nb[1], (int)K->ne[1]);
+#endif
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
@@ -556,7 +570,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
+    best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst);
+#if defined(TURBO_DIAG_KQ)
+    printf("TURBO_DIAG_FLASH_ATTN_EXT called K_type=%s V_type=%s kernel=%d Q_ne1=%d\n", ggml_type_name(dst->src[1]->type), ggml_type_name(dst->src[2]->type), (int)kernel, dst->src[0]->ne[1]);
+#endif
+    switch (kernel) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
         case BEST_FATTN_KERNEL_TILE:

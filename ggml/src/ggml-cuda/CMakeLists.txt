@@ -129,6 +129,8 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q8_0-turbo2_0.cu
             template-instances/fattn-vec-instance-turbo3_0-turbo2_0.cu
             template-instances/fattn-vec-instance-turbo2_0-turbo3_0.cu
+            template-instances/fattn-vec-instance-turbo3_0-f16.cu
+            template-instances/fattn-vec-instance-f16-turbo3_0.cu
             template-instances/fattn-vec-instance-turbo4_0-turbo4_0.cu
             template-instances/fattn-vec-instance-turbo4_0-q8_0.cu
             template-instances/fattn-vec-instance-q8_0-turbo4_0.cu
@@ -199,6 +201,11 @@ if (CUDAToolkit_FOUND)
     set(CUDA_CXX_FLAGS "")
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)
+
+    option(GGML_CUDA_DIAG_KQ "Enable TurboQuant KQ diagnostics" OFF)
+    if (GGML_CUDA_DIAG_KQ)
+        list(APPEND CUDA_FLAGS -DTURBO_DIAG_KQ)
+    endif()
 
     if (GGML_CUDA_DEBUG)
         list(APPEND CUDA_FLAGS -lineinfo)
