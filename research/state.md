@@ -7,9 +7,9 @@ Este archivo representa el estado vivo del conocimiento en este repositorio. Cua
 ---
 
 ## 📌 Hito Actual (Active Milestone)
-- **Hito**: `milestone-006-triattention-kv-eviction`
-- **Objetivo**: Implementar desalojo físico de páginas KV mediante scoring TriAttention con claves K invertidas por RoPE, más presupuesto configurable vía `--triattention-page-budget`.
-- **Estado**: Implementado. Build OK. Pendiente validación numérica/calibración.
+- **Hito**: `milestone-007-triattention-calibration`
+- **Objetivo**: Calibrar el scoring de páginas de TriAttention sobre corpus representativos y realizar la validación numérica de la calidad del contexto y perplejidad del modelo bajo presupuestos de páginas físicas.
+- **Estado**: Validación numérica en progreso (Estado: PENDIENTE).
 
 ---
 

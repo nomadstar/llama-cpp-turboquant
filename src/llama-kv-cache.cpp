@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -1239,6 +1240,10 @@ void llama_kv_cache::pg_alloc_for_sinfo(const slot_info & sinfo) {
     }
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const uint32_t strm = sinfo.strm[s];
+        std::set<uint32_t> current_batch_pages;
+        for (const uint32_t cell_idx : sinfo.idxs[s]) {
+            current_batch_pages.insert(cell_idx / pg_block_size);
+        }
         for (const uint32_t cell_idx : sinfo.idxs[s]) {
             const uint32_t lpage = cell_idx / pg_block_size;
             GGML_ASSERT(lpage < n_pages_per_stream);
@@ -1254,7 +1259,7 @@ void llama_kv_cache::pg_alloc_for_sinfo(const slot_info & sinfo) {
                         int32_t evict_lp = -1;
                         float min_score = std::numeric_limits<float>::max();
                         for (uint32_t lp = 0; lp < n_pages_per_stream; ++lp) {
-                            if (pg_page_table[strm][lp] >= 0 && lp != lpage) {
+                            if (pg_page_table[strm][lp] >= 0 && current_batch_pages.find(lp) == current_batch_pages.end()) {
                                 float score = calculate_page_relevance_score(strm, lp);
                                 if (score < min_score) {
                                     min_score = score;

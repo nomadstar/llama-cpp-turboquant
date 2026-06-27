@@ -1,0 +1,7 @@
+{
+    "baseline_ppl": 38805.0457,
+    "eviction_ppl": 38805.0457,
+    "page_budget": 4,
+    "context_len": 256,
+    "quality_retention_pct": 100.0
+}

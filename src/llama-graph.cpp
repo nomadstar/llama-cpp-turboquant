@@ -2166,7 +2166,19 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     if (inp->self_v_page_table && cparams.flash_attn) {
-        ggml_flash_attn_ext_set_page_table(cur, inp->self_v_page_table);
+        ggml_tensor * fa_tensor = cur;
+        while (fa_tensor && fa_tensor->op != GGML_OP_FLASH_ATTN_EXT) {
+            if (fa_tensor->op == GGML_OP_RESHAPE || fa_tensor->op == GGML_OP_VIEW || fa_tensor->op == GGML_OP_TRANSPOSE || fa_tensor->op == GGML_OP_TURBO_WHT) {
+                fa_tensor = fa_tensor->src[0];
+            } else {
+                break;
+            }
+        }
+        if (fa_tensor && fa_tensor->op == GGML_OP_FLASH_ATTN_EXT) {
+            ggml_flash_attn_ext_set_page_table(fa_tensor, inp->self_v_page_table);
+        } else {
+            ggml_flash_attn_ext_set_page_table(cur, inp->self_v_page_table);
+        }
     }
     cb(cur, "kqv_out", il);
 
