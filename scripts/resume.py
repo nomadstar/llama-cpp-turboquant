@@ -40,11 +40,11 @@ def main():
     for sec in sections:
         if not sec.strip():
             continue
-        
+
         lines = sec.strip().split('\n')
         title = lines[0]
         body = '\n'.join(lines[1:])
-        
+
         # Determine section color and icon based on title
         if "Hito Actual" in title:
             color = CYAN
@@ -63,19 +63,19 @@ def main():
             title_display = "📋 TAREAS PENDIENTES (TODO)"
         else:
             continue # Skip other sections like the main title
-            
+
         print(f"{BOLD}{color}{title_display}:{RESET}")
-        
+
         # Format the body
         for line in lines[1:]:
             line = line.strip()
             if not line:
                 continue
-            
+
             # Skip horizontal rules
             if line.startswith("---") or line.strip() == "---":
                 continue
-            
+
             # Subheaders
             if line.startswith("###"):
                 sub = line.replace("###", "").strip()

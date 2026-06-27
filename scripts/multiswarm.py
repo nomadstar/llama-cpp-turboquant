@@ -163,7 +163,7 @@ def run_planning(task, iteration, critique=None, model=None, skip_permissions=Fa
         cmd.extend(["--model", model])
     if resume and iteration > 1:
         cmd.append("--continue")
-    
+
     cmd.extend(["--prompt", prompt])
 
     print(f"\n{BOLD}{CYAN}=== Phase 1: Planning with Architect (agy) ==={RESET}")
@@ -172,7 +172,7 @@ def run_planning(task, iteration, critique=None, model=None, skip_permissions=Fa
 
     # Run with real-time streaming output
     res = run_with_output(cmd, prefix="AGY")
-    
+
     if res.returncode == 0:
         if not os.path.exists(PLAN_FILE) or os.path.getsize(PLAN_FILE) == 0:
             print(f"{YELLOW}Warning: '{PLAN_FILE}' was not created or is empty. Please verify the agent wrote it.{RESET}")
@@ -438,7 +438,7 @@ def main():
     success = False
     for iteration in range(1, args.iterations + 1):
         print(f"\n{BOLD}{YELLOW}>>> STARTING ITERATION {iteration} of {args.iterations} <<<{RESET}")
-        
+
         # Read latest critique if present
         critique = None
         if iteration > 1 and os.path.exists(CRITIQUE_FILE):
@@ -495,7 +495,7 @@ def main():
                 print(f"{BOLD}Critique:{RESET}")
                 with open(CRITIQUE_FILE, "r") as f:
                     print(f.read())
-            
+
             if iteration < args.iterations:
                 if not args.no_interactive:
                     choice = input(f"\n{BOLD}{YELLOW}Proceed to Iteration {iteration + 1}? (y/n): {RESET}").strip().lower()

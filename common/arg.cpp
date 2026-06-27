@@ -2036,6 +2036,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--triattention-page-budget"}, "N",
+        "physical page budget for TriAttention KV eviction (0 = disabled)",
+        [](common_params & params, int value) {
+            params.triattention_page_budget = value;
+        }
+    ));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {

@@ -50,9 +50,11 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                 uint32_t   triattention_page_budget) :
     model(model), hparams(model.hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
+    triattention_page_budget(triattention_page_budget) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -370,9 +372,22 @@ llama_kv_cache::llama_kv_cache(
         const uint32_t n_pages_per_stream = (kv_size + pg_block_size - 1) / pg_block_size;
         pg_n_blocks = n_pages_per_stream * n_stream;
         pg_page_table.assign(n_stream, std::vector<int32_t>(n_pages_per_stream, -1));
-        pg_free_blocks.resize(pg_n_blocks);
-        for (uint32_t i = 0; i < pg_n_blocks; ++i) {
-            pg_free_blocks[i] = pg_n_blocks - 1 - i;
+        // Reserve physical block 0 as a dummy zero block (never allocated, omitted from pg_free_blocks)
+        if (pg_n_blocks > 1) {
+            pg_free_blocks.resize(pg_n_blocks - 1);
+            for (uint32_t i = 0; i < pg_n_blocks - 1; ++i) {
+                pg_free_blocks[i] = pg_n_blocks - 1 - i;
+            }
+        } else {
+            pg_free_blocks.clear();
+        }
+
+        // Zero out physical block 0 for layer.v in all layers
+        for (auto & layer : layers) {
+            if (layer.v != nullptr) {
+                std::vector<uint8_t> zeros(pg_block_size * layer.v->nb[1], 0);
+                ggml_backend_tensor_set(layer.v, zeros.data(), 0, zeros.size());
+            }
         }
     }
 }
@@ -386,9 +401,22 @@ void llama_kv_cache::clear(bool data) {
         }
     }
     if (pg_enabled) {
-        pg_free_blocks.resize(pg_n_blocks);
-        for (uint32_t i = 0; i < pg_n_blocks; ++i) {
-            pg_free_blocks[i] = pg_n_blocks - 1 - i;
+        // Reserve physical block 0 as a dummy zero block (never allocated, omitted from pg_free_blocks)
+        if (pg_n_blocks > 1) {
+            pg_free_blocks.resize(pg_n_blocks - 1);
+            for (uint32_t i = 0; i < pg_n_blocks - 1; ++i) {
+                pg_free_blocks[i] = pg_n_blocks - 1 - i;
+            }
+        } else {
+            pg_free_blocks.clear();
+        }
+
+        // Zero out physical block 0 for layer.v in all layers
+        for (auto & layer : layers) {
+            if (layer.v != nullptr) {
+                std::vector<uint8_t> zeros(pg_block_size * layer.v->nb[1], 0);
+                ggml_backend_tensor_set(layer.v, zeros.data(), 0, zeros.size());
+            }
         }
     }
 
@@ -1212,6 +1240,36 @@ void llama_kv_cache::pg_alloc_for_sinfo(const slot_info & sinfo) {
             const uint32_t lpage = cell_idx / pg_block_size;
             GGML_ASSERT(lpage < n_pages_per_stream);
             if (pg_page_table[strm][lpage] < 0) {
+                if (triattention_page_budget > 0 && sinfo.size() == 1) {
+                    uint32_t allocated_count = 0;
+                    for (uint32_t lp = 0; lp < n_pages_per_stream; ++lp) {
+                        if (pg_page_table[strm][lp] >= 0) {
+                            allocated_count++;
+                        }
+                    }
+                    if (allocated_count >= (uint32_t)triattention_page_budget) {
+                        int32_t evict_lp = -1;
+                        float min_score = std::numeric_limits<float>::max();
+                        for (uint32_t lp = 0; lp < n_pages_per_stream; ++lp) {
+                            if (pg_page_table[strm][lp] >= 0 && lp != lpage) {
+                                float score = calculate_page_relevance_score(strm, lp);
+                                if (score < min_score) {
+                                    min_score = score;
+                                    evict_lp = lp;
+                                }
+                            }
+                        }
+                        if (evict_lp >= 0) {
+                            int32_t evicted_block = pg_page_table[strm][evict_lp];
+                            pg_page_table[strm][evict_lp] = -1;
+                            pg_free_blocks.push_back(evicted_block);
+                            if (debug > 0) {
+                                fprintf(stderr, "[TRIATTN-EVICT] Evicted page %u (block %d, score %f) in stream %u\n",
+                                        evict_lp, evicted_block, min_score, strm);
+                            }
+                        }
+                    }
+                }
                 GGML_ASSERT(!pg_free_blocks.empty() && "PagedAttention: out of physical blocks");
                 pg_page_table[strm][lpage] = pg_free_blocks.back();
                 pg_free_blocks.pop_back();
@@ -2727,4 +2785,157 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+void llama_kv_cache::get_unrotated_key(const ggml_tensor * k_tensor, uint32_t strm, uint32_t cell_idx, float * dst) {
+    const size_t row_size_bytes = k_tensor->nb[1];
+    std::vector<uint8_t> temp_buf(row_size_bytes);
+    ggml_backend_tensor_get(k_tensor, temp_buf.data(), strm * k_tensor->nb[2] + cell_idx * k_tensor->nb[1], row_size_bytes);
+
+    const int64_t ne0 = k_tensor->ne[0];
+    if (k_tensor->type == GGML_TYPE_F32) {
+        std::memcpy(dst, temp_buf.data(), ne0 * sizeof(float));
+    } else if (k_tensor->type == GGML_TYPE_F16) {
+        ggml_fp16_to_fp32_row((const ggml_fp16_t *) temp_buf.data(), dst, ne0);
+    } else if (k_tensor->type == GGML_TYPE_Q8_0) {
+        #pragma pack(push, 1)
+        struct block_q8_0_local {
+            ggml_fp16_t d;
+            int8_t qs[32];
+        };
+        #pragma pack(pop)
+        const block_q8_0_local * blocks = (const block_q8_0_local *) temp_buf.data();
+        for (int64_t i = 0; i < ne0; ++i) {
+            int64_t bi = i / 32;
+            int64_t ii = i % 32;
+            dst[i] = (float) blocks[bi].qs[ii] * ggml_fp16_to_fp32(blocks[bi].d);
+        }
+    } else {
+        std::memset(dst, 0, ne0 * sizeof(float));
+        static bool warned = false;
+        if (!warned) {
+            LLAMA_LOG_WARN("%s: unsupported key cache type %s\n", __func__, ggml_type_name(k_tensor->type));
+            warned = true;
+        }
+    }
+
+    uint32_t il = 0;
+    for (const auto & layer : layers) {
+        if (layer.k == k_tensor) {
+            il = layer.il;
+            break;
+        }
+    }
+
+    float freq_base = hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : hparams.rope_freq_base_train;
+    float freq_scale = hparams.is_swa(il) ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
+    if (freq_base == 0.0f) {
+        freq_base = 10000.0f;
+    }
+    if (freq_scale == 0.0f) {
+        freq_scale = 1.0f;
+    }
+
+    uint32_t head_k = hparams.n_embd_head_k(il);
+    uint32_t n_head_kv = hparams.n_head_kv(il);
+    llama_pos pos = v_cells[strm].pos_get(cell_idx);
+
+    const bool k_is_turbo = (k_tensor->type == GGML_TYPE_TURBO3_0 || k_tensor->type == GGML_TYPE_TURBO4_0 || k_tensor->type == GGML_TYPE_TURBO2_0);
+    uint32_t padded_head_k = (k_is_turbo && head_k % 128 != 0) ? ((head_k + 127) / 128) * 128 : head_k;
+
+    for (uint32_t h = 0; h < n_head_kv; ++h) {
+        float * dst_head = dst + h * padded_head_k;
+        for (uint32_t j = 0; j < head_k / 2; ++j) {
+            float theta = (float)pos * powf(freq_base, -2.0f * (float)j / (float)head_k) * freq_scale;
+            float cos_t = cosf(theta);
+            float sin_t = sinf(theta);
+
+            float k0 = dst_head[2 * j];
+            float k1 = dst_head[2 * j + 1];
+
+            dst_head[2 * j]     =  k0 * cos_t + k1 * sin_t;
+            dst_head[2 * j + 1] = -k0 * sin_t + k1 * cos_t;
+        }
+    }
+}
+
+float llama_kv_cache::calculate_page_relevance_score(uint32_t strm, uint32_t lp) {
+    llama_pos pos_last = -1;
+    uint32_t cell_last = 0;
+    const uint32_t kv_size = get_size();
+    for (uint32_t i = 0; i < kv_size; ++i) {
+        if (!v_cells[strm].is_empty(i)) {
+            llama_pos p = v_cells[strm].pos_get(i);
+            if (p > pos_last) {
+                pos_last = p;
+                cell_last = i;
+            }
+        }
+    }
+    if (pos_last == -1) {
+        return 0.0f;
+    }
+
+    uint32_t start_cell = lp * pg_block_size;
+    uint32_t end_cell = start_cell + pg_block_size;
+    std::vector<uint32_t> active_cells;
+    for (uint32_t c = start_cell; c < end_cell; ++c) {
+        if (c < kv_size && !v_cells[strm].is_empty(c)) {
+            active_cells.push_back(c);
+        }
+    }
+    if (active_cells.empty()) {
+        return 0.0f;
+    }
+
+    double total_score = 0.0;
+    uint32_t num_layers = 0;
+
+    uint64_t max_embd_k = 0;
+    for (const auto & layer : layers) {
+        if (layer.k != nullptr && (uint64_t)layer.k->ne[0] > max_embd_k) {
+            max_embd_k = layer.k->ne[0];
+        }
+    }
+
+    std::vector<float> k_last(max_embd_k);
+    std::vector<float> k_c(max_embd_k);
+
+    for (const auto & layer : layers) {
+        if (layer.k == nullptr) continue;
+        num_layers++;
+
+        get_unrotated_key(layer.k, strm, cell_last, k_last.data());
+
+        double layer_score_sum = 0.0;
+        for (uint32_t c : active_cells) {
+            llama_pos pos_c = v_cells[strm].pos_get(c);
+
+            get_unrotated_key(layer.k, strm, c, k_c.data());
+
+            double dot = 0.0;
+            double norm_u = 0.0;
+            double norm_v = 0.0;
+            uint64_t ne0 = layer.k->ne[0];
+            for (uint64_t i = 0; i < ne0; ++i) {
+                dot += (double)(k_c[i] * k_last[i]);
+                norm_u += (double)(k_c[i] * k_c[i]);
+                norm_v += (double)(k_last[i] * k_last[i]);
+            }
+            norm_u = sqrt(norm_u);
+            norm_v = sqrt(norm_v);
+
+            float sim = 0.0f;
+            if (norm_u > 1e-9 && norm_v > 1e-9) {
+                sim = (float)(dot / (norm_u * norm_v));
+            }
+
+            float decay = 1.0f / (1.0f + 0.001f * (float)(pos_last - pos_c));
+            float score_c = (float)norm_u * (sim + 1.0f) * decay;
+            layer_score_sum += score_c;
+        }
+        total_score += (layer_score_sum / active_cells.size());
+    }
+
+    return num_layers > 0 ? (float)(total_score / num_layers) : 0.0f;
 }

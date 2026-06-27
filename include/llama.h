@@ -378,6 +378,8 @@ extern "C" {
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
+
+        int32_t                           triattention_page_budget;
     };
 
     // model quantization parameters

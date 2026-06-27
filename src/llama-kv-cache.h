@@ -106,7 +106,8 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                     uint32_t   triattention_page_budget = 0);
 
     ~llama_kv_cache() = default;
 
@@ -321,6 +322,11 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+
+    uint32_t triattention_page_budget = 0;
+
+    float calculate_page_relevance_score(uint32_t strm, uint32_t lp);
+    void get_unrotated_key(const ggml_tensor * k_tensor, uint32_t strm, uint32_t cell_idx, float * dst);
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {
