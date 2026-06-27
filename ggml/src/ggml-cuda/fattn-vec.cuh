@@ -429,7 +429,7 @@ static __global__ void flash_attn_ext_vec(
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
                 if constexpr (V_is_turbo) {
-                    const float kq_val = __shfl_sync(0xFFFFFFFF, KQ_reg[j], k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V));
+                    const float kq_val = __shfl_sync(0xFFFFFFFF, KQ_reg[j], k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V), WARP_SIZE);
                     KQ_k[j] = make_half2(__float2half(kq_val), __float2half(kq_val));
                 } else {
                     KQ_k[j] = __half2half2(KQ[j*nthreads + k]);
@@ -479,7 +479,7 @@ static __global__ void flash_attn_ext_vec(
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
                 if constexpr (V_is_turbo) {
-                    KQ_k[j] = __shfl_sync(0xFFFFFFFF, KQ_reg[j], k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V));
+                    KQ_k[j] = __shfl_sync(0xFFFFFFFF, KQ_reg[j], k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V), WARP_SIZE);
                 } else {
                     KQ_k[j] = KQ[j*nthreads + k];
                 }
@@ -753,7 +753,7 @@ static __global__ void flash_attn_ext_vec(
                     int xor_lane = s / 4;
                     float other[4];
                     for (int off = 0; off < 4; ++off) {
-                        other[off] = __shfl_xor_sync(0xFFFFFFFF, val[off], xor_lane);
+                        other[off] = __shfl_xor_sync(0xFFFFFFFF, val[off], xor_lane, WARP_SIZE);
                     }
 #ifdef V_DOT2_F32_F16_AVAILABLE
                     half * sh = section_h;

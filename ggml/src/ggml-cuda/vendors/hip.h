@@ -53,7 +53,10 @@
 #define __shfl_down_sync(...) __SHFL_DOWN_GET(__VA_ARGS__, __SHFL_DOWN_SYNC_4, __SHFL_DOWN_SYNC_3)(__VA_ARGS__)
 #define __all_sync(mask, var) __all(var)
 #define __any_sync(mask, var) __any(var)
-#define __ballot_sync(mask, var) ((uint32_t)__ballot(var))
+#define __ballot_sync(mask, var) \
+    ( (warpSize == 64) ? \
+      ((uint32_t)(__ballot(var) >> (((threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y) % 64) / 32 * 32))) : \
+      ((uint32_t)__ballot(var)) )
 #define cublasStrsmBatched hipblasStrsmBatched
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
