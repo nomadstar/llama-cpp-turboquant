@@ -44,8 +44,8 @@ Las siguientes técnicas e implementaciones están demostradas, optimizadas y ba
 - **Resultado**: Build HIP/ROCm corregido. Auditoría de `turbo-quant.cuh`, `fattn-common.cuh` y `fattn-tile.cuh` sin cambios adicionales.
 
 ### 7. TriAttention KV Eviction
-- **Implementación**: Presupuesto configurable de páginas físicas (`--triattention-page-budget`), bloque físico 0 reservado como dummy zero block y `pg_score_and_evict()` para desalojar la página de menor score usando productos punto sobre K con RoPE inverso.
-- **Resultado**: Implementado y compila. Pendiente de validación numérica de calidad/perplexity.
+- **Implementación**: Presupuesto configurable de páginas físicas (`--triattention-page-budget`), bloque físico 0 reservado como dummy zero block y `pg_score_and_evict()` para desalojar la página de menor score usando productos punto sobre K con RoPE inverso. La fix pass de M006 corrigió el uso de `rope_freq_base`/`rope_freq_scale` efectivos en `get_unrotated_key()` y habilitó enforcement del presupuesto también durante prefill.
+- **Resultado**: Implementado, corregido frente a los issues P1/P3 de la crítica y compatible con modelos YaRN/NTK-aware en escenarios single-sequence. Pendiente de validación numérica de calidad/perplexity.
 
 ---
 
@@ -86,4 +86,4 @@ Las siguientes técnicas e implementaciones están demostradas, optimizadas y ba
 - [x] Ejecutar validación de NaN en `turbo4` (Hito 004)
 - [x] Portar los kernels de `turbo4` a HIP/ROCm
 - [x] Implementar el scoring y desalojo físico en TriAttention
-- [ ] Validación numérica Hito 006 (TriAttention KV eviction)
+- [ ] Validación numérica Hito 006 (TriAttention KV eviction, H6.1, GPU + modelo real)

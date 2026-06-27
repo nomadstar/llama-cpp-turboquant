@@ -6,6 +6,28 @@
 
 ## 2026-06
 
+### M006 fix - TriAttention RoPE freq_base and prefill eviction
+
+**Problem**: A critique of the initial M006 TriAttention implementation found two issues: a RoPE
+frequency correctness bug in `get_unrotated_key()` and a prefill budget-enforcement bug that kept
+eviction decode-only.
+
+- `get_unrotated_key()` was using the wrong effective RoPE frequency source for YaRN/NTK-aware
+  models, which could corrupt page relevance scores.
+- The eviction gate still depended on the removed `sinfo.size() == 1` decode-only assumption,
+  allowing long prefills to exhaust the page pool before decode.
+
+**Fix**:
+
+- Added `rope_freq_base_eff` and `rope_freq_scale_eff` storage to `llama_kv_cache` and wired them
+  from `llama_model::get_rope_freq_base()` / `get_rope_freq_scale()`.
+- Updated `get_unrotated_key()` to use the stored effective RoPE values.
+- Removed the `sinfo.size() == 1` guard from the allocation/eviction path so the page budget is
+  enforced during both prefill and decode.
+
+**Impact**: YaRN/NTK-scaled models are now scored correctly by TriAttention, and prefill can no
+longer exhaust the physical page pool before decode.
+
 ### TriAttention KV eviction implementation
 
 **Feature**: Added page-budgeted KV eviction for paged V cache using RoPE-inverted key
