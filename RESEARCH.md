@@ -1,6 +1,6 @@
 # Research Automation System (Research OS)
 
-Este repositorio no sólo es un motor de inferencia optimizado; es un **entorno de investigación automatizado** diseñado para que múltiples sistemas de Inteligencia Artificial colaboren eficazmente con supervisión humana. 
+Este repositorio no sólo es un motor de inferencia optimizado; es un **entorno de investigación automatizado** diseñado para que múltiples sistemas de Inteligencia Artificial colaboren eficazmente con supervisión humana.
 
 Para lograr esto, implementamos un **"Sistema Operativo de Investigación" (Research OS)** dentro del repositorio. Este sistema estructurado permite que cualquier agente de IA se incorpore al proyecto, entienda el estado actual, las hipótesis validadas, los caminos descartados y continúe el trabajo sin pérdida de contexto ni redundancia.
 

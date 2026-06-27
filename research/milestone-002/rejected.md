@@ -4,7 +4,7 @@ Durante el diseño de la infraestructura de páginas se descartaron las siguient
 
 ## 1. Paginación Contigua y Dinámica para el Caché de Claves (K)
 - **Idea**: Aplicar paginación no contigua e indexación por tabla de páginas tanto a K como a V.
-- **Por qué se rechazó**: Las claves (K) requieren una lectura secuencial rápida y regular durante el prefill y la atención. Introducir indirección de punteros a nivel de bloque en K añade latencia crítica en el path de prefill sin otorgar beneficios adicionales de fragmentación. 
+- **Por qué se rechazó**: Las claves (K) requieren una lectura secuencial rápida y regular durante el prefill y la atención. Introducir indirección de punteros a nivel de bloque en K añade latencia crítica en el path de prefill sin otorgar beneficios adicionales de fragmentación.
 - **Decisión**: El caché de K se mantiene con índices planos lineales (`flat pool indices`), mientras que sólo V utiliza el direccionamiento por tabla de páginas.
 
 ## 2. Modificación directa de los kernels de Flash Attention en la Fase 1

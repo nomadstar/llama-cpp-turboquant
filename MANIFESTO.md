@@ -214,7 +214,7 @@ This project also investigates a second problem:
 
 > **Can AI systems collaborate to accelerate systems research while remaining under human supervision?**
 
-Rather than replacing engineering judgment, AI is treated as an engineering tool. 
+Rather than replacing engineering judgment, AI is treated as an engineering tool.
 
 To make this collaboration repeatable and rigorous, this repository implements a structured **Research Automation Framework (Research OS)**. The framework separates responsibilities across specialized AI roles (Architect, Implementer, Validator, Reviewer) and anchors progress in immutable milestone logs under the `/research` directory.
 

@@ -65,7 +65,7 @@ if [ -f "scripts/turbo-quality-gate.sh" ]; then
     # If not, warn but don't fail unless explicitly requested.
     WIKI_FILE="${WIKI:-~/local_llms/llama.cpp/wikitext-2-raw/wiki.test.raw}"
     MODEL_FILE="${MODEL:-~/local_llms/models/Qwen3.5-35B-A3B-Q8_0.gguf}"
-    
+
     if [ ! -f "$MODEL_FILE" ] && [ -z "$FORCE_GATE" ]; then
         echo -e "${YELLOW}Warning: Quality Gate model '$MODEL_FILE' not found.${RESET}"
         echo -e "To run perplexity gates, download the model or set MODEL=/path/to/model.gguf."
