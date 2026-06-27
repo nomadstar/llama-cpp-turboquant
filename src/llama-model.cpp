@@ -8277,7 +8277,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 hparams.swa_type,
                                 nullptr,
                                 nullptr,
-                                cparams.triattention_page_budget);
+                                cparams.triattention_page_budget,
+                                get_rope_freq_base(cparams, 0),
+                                get_rope_freq_scale(cparams, 0));
                     }
                 }
             }

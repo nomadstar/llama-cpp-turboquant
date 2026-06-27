@@ -51,10 +51,13 @@ llama_kv_cache::llama_kv_cache(
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-                 uint32_t   triattention_page_budget) :
+                 uint32_t   triattention_page_budget,
+                    float   rope_freq_base_eff,
+                    float   rope_freq_scale_eff) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
-    triattention_page_budget(triattention_page_budget) {
+    triattention_page_budget(triattention_page_budget),
+    rope_freq_base_eff(rope_freq_base_eff), rope_freq_scale_eff(rope_freq_scale_eff) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -1240,7 +1243,7 @@ void llama_kv_cache::pg_alloc_for_sinfo(const slot_info & sinfo) {
             const uint32_t lpage = cell_idx / pg_block_size;
             GGML_ASSERT(lpage < n_pages_per_stream);
             if (pg_page_table[strm][lpage] < 0) {
-                if (triattention_page_budget > 0 && sinfo.size() == 1) {
+                if (triattention_page_budget > 0) {
                     uint32_t allocated_count = 0;
                     for (uint32_t lp = 0; lp < n_pages_per_stream; ++lp) {
                         if (pg_page_table[strm][lp] >= 0) {
@@ -2827,8 +2830,8 @@ void llama_kv_cache::get_unrotated_key(const ggml_tensor * k_tensor, uint32_t st
         }
     }
 
-    float freq_base = hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : hparams.rope_freq_base_train;
-    float freq_scale = hparams.is_swa(il) ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
+    float freq_base = hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : rope_freq_base_eff;
+    float freq_scale = hparams.is_swa(il) ? hparams.rope_freq_scale_train_swa : rope_freq_scale_eff;
     if (freq_base == 0.0f) {
         freq_base = 10000.0f;
     }

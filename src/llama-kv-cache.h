@@ -107,7 +107,9 @@ public:
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-                     uint32_t   triattention_page_budget = 0);
+                     uint32_t   triattention_page_budget = 0,
+                        float   rope_freq_base_eff = 0.0f,
+                        float   rope_freq_scale_eff = 0.0f);
 
     ~llama_kv_cache() = default;
 
@@ -324,6 +326,9 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
 
     uint32_t triattention_page_budget = 0;
+
+    float rope_freq_base_eff = 0.0f;
+    float rope_freq_scale_eff = 0.0f;
 
     float calculate_page_relevance_score(uint32_t strm, uint32_t lp);
     void get_unrotated_key(const ggml_tensor * k_tensor, uint32_t strm, uint32_t cell_idx, float * dst);
