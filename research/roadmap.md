@@ -19,7 +19,7 @@ gantt
     Milestone 004 - Validación NaN turbo4        :done,    m4, after m3, 10d
     Milestone 005 - ROCm Backend Completo        :done,    m5, after m4, 15d
     Milestone 006 - TriAttention Eviction        :active,  m6, after m5, 20d
-    Milestone 007 - Calibración y validación TriAttention :         m7, after m6, 15d
+    Milestone 007 - Calibración y validación TriAttention :active,  m7, after m6, 15d
 ```
 
 ---
@@ -73,7 +73,7 @@ gantt
   - Implementar desalojo físico de páginas con menor relevancia en el pool.
 
 ### [Milestone 007: TriAttention Calibration and Numerical Validation](file:///home/ignatus/GitHub/llama-cpp-turboquant/research/milestone-007/)
-- **Estado**: 📅 **PLANIFICADO**
+- **Estado**: 🔄 **IN PROGRESS** — infraestructura lista, pendiente corrida GPU/modelo
 - **Prioridad**: P4 (Investigación)
 - **Objetivos**:
   - Calibrar el scoring de páginas TriAttention sobre corpus representativos.

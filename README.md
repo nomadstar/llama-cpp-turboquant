@@ -53,6 +53,7 @@ unchanged. TurboQuant types are opt-in via `--cache-type-k` / `--cache-type-v`.
 | Paged Attention (Phase 1) | ✅ Functional |
 | Paged Attention (Phase 2) | 🚧 Implemented — Pending GPU Validation |
 | TriAttention | 🚧 Implemented — Pending Validation |
+| TriAttention Calibration (M007) | 🔄 Infrastructure Ready — Pending GPU/Model Run |
 | ROCm / HIP Portability Audit | ✅ Complete — HIP compatibility fixes validated |
 | Metal Support | ✅ Stable |
 | Vulkan Support | ❌ Not Started |
@@ -278,8 +279,14 @@ on a validated foundation.
 - [x] Phase 1: Gather-before-FA with dynamic page allocation (✅ Functional)
 - [x] Phase 2: Native paged FA (page-table-lookup in kernel) (🚧 Pending Validation)
 - [x] Phase 3: TriAttention KV eviction via RoPE-inverted key scoring (🚧 Pending Validation)
+- [x] M007: TriAttention calibration infrastructure (`scripts/triattention_calibrate.py`, milestone stubs) (🔄 Pending GPU run)
 - [ ] Sliding window support
 - [ ] Continuous batching
+
+### Research Scripts
+
+- `scripts/turbo-quality-gate.sh` — automated PPL + speed quality gate
+- `scripts/triattention_calibrate.py` — baseline vs eviction calibration runner for H6.1; writes `research/milestone-007/calibration_results.json`
 
 ### Phase 4 — Backend Portability (Pending)
 

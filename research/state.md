@@ -1,6 +1,6 @@
 # Research State (Estado de la Investigación)
 
-*Última actualización: 2026-06-26*
+*Última actualización: 2026-06-27*
 
 Este archivo representa el estado vivo del conocimiento en este repositorio. Cualquier sistema de IA debe leer esto antes de proponer hipótesis o escribir código, y actualizarlo al finalizar un experimento.
 
@@ -9,7 +9,7 @@ Este archivo representa el estado vivo del conocimiento en este repositorio. Cua
 ## 📌 Hito Actual (Active Milestone)
 - **Hito**: `milestone-007-triattention-calibration`
 - **Objetivo**: Calibrar el scoring de páginas de TriAttention sobre corpus representativos y realizar la validación numérica de la calidad del contexto y perplejidad del modelo bajo presupuestos de páginas físicas.
-- **Estado**: Validación numérica en progreso (Estado: PENDIENTE).
+- **Estado**: Infraestructura de calibración completa; validación numérica en progreso (Estado: PENDIENTE GPU + modelo).
 
 ---
 
@@ -86,4 +86,7 @@ Las siguientes técnicas e implementaciones están demostradas, optimizadas y ba
 - [x] Ejecutar validación de NaN en `turbo4` (Hito 004)
 - [x] Portar los kernels de `turbo4` a HIP/ROCm
 - [x] Implementar el scoring y desalojo físico en TriAttention
-- [ ] Validación numérica Hito 006 (TriAttention KV eviction, H6.1, GPU + modelo real)
+- [x] Preparar infraestructura M007 para calibración/validación de TriAttention (`scripts/triattention_calibrate.py`, `research/milestone-007/`)
+- [ ] Ejecutar validación GPU de M007 (H6.1: baseline vs eviction con `--triattention-page-budget` sobre modelo real)
+- [ ] Completar `research/milestone-007/evidence.md` con resultados de `calibration_results.json`
+- [ ] Completar `research/milestone-007/conclusions.md` con veredicto sobre retención >= 95% a 50% de page budget

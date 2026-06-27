@@ -6,6 +6,19 @@
 
 ## 2026-06
 
+### M007 - TriAttention calibration and numerical validation infrastructure
+
+**Feature**: Added the calibration/validation scaffolding for hypothesis H6.1.
+
+- New script `scripts/triattention_calibrate.py` runs baseline (no eviction) vs eviction
+  (`--triattention-page-budget N`) and computes `quality_retention_pct = (baseline_ppl / eviction_ppl) * 100`.
+- Prefers `build/bin/llama-perplexity` and falls back to `build/bin/llama-cli -ppl`.
+- Writes machine-readable output to `research/milestone-007/calibration_results.json` and prints a comparison table to stdout.
+- Added `research/milestone-007/objective.md` plus stub `evidence.md` / `conclusions.md`
+  marked pendiente until the GPU + model run is executed.
+
+**Status**: Infrastructure complete. Numerical validation pending GPU execution.
+
 ### M006 fix - TriAttention RoPE freq_base and prefill eviction
 
 **Problem**: A critique of the initial M006 TriAttention implementation found two issues: a RoPE
