@@ -7,10 +7,9 @@ Este archivo representa el estado vivo del conocimiento en este repositorio. Cua
 ---
 
 ## 📌 Hito Actual (Active Milestone)
-- **Hito**: `milestone-003-paged-attention-native-fa`
-- **Objetivo**: Integrar la búsqueda en tablas de páginas (page table lookups) directamente dentro del kernel de Flash Attention (`fattn-vec.cuh` y `fattn-tile.cuh`), eliminando el paso de gather intermedio de la Fase 1.
-- **Estado**: Implementado — pendiente de validación numérica.
-- **Fase 2 completada**: `v_paged_ptr()` en fattn-common.cuh, todos los accesos V en VEC/TILE migrados, API `ggml_flash_attn_ext_set_page_table()` operativa, grafo salta gather cuando FA + paging activos.
+- **Hito**: `milestone-004-nan-inf-validation`
+- **Objetivo**: Explicit turbo4 NaN/Inf validation: add guards in CPU quantizer/dequantizer (ggml-turbo-quant.c) and CUDA dequantizer (turbo-quant.cuh) to prevent NaN/Inf propagation; extend test-turbo-quant.c with extreme-input test cases.
+- **Estado**: Implementado y listo para validación.
 
 ---
 

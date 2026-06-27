@@ -347,6 +347,9 @@ static __device__ void quantize_f32_turbo4_0_block(const float * __restrict__ sr
 
 static __device__ __forceinline__ float turbo4_dequant_element(
         const block_turbo4_0 * __restrict__ x, int j, float norm) {
+    if (isnan(norm) || isinf(norm)) {
+        norm = 0.0f;
+    }
     uint8_t idx = (x->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
     return TURBO_CENTROIDS_4BIT[idx] * norm;
 }
@@ -385,6 +388,9 @@ static __device__ void quantize_f32_turbo3_0_block(const float * __restrict__ sr
 
 static __device__ __forceinline__ float turbo3_dequant_element(
         const block_turbo3_0 * __restrict__ x, int j, float norm) {
+    if (isnan(norm) || isinf(norm)) {
+        norm = 0.0f;
+    }
     uint8_t low2 = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
     uint8_t hi1  = (x->signs[j / 8] >> (j % 8)) & 0x1;
     uint8_t idx  = low2 | (hi1 << 2);
@@ -416,6 +422,9 @@ static __device__ void quantize_f32_turbo2_0_block(const float * __restrict__ sr
 
 static __device__ __forceinline__ float turbo2_dequant_element(
         const block_turbo2_0 * __restrict__ x, int j, float norm) {
+    if (isnan(norm) || isinf(norm)) {
+        norm = 0.0f;
+    }
     uint8_t idx = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
     return TURBO_CENTROIDS_2BIT[idx] * norm;
 }

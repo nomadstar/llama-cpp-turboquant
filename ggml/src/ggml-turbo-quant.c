@@ -438,14 +438,23 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
 
         /* Step 1: Extract norm */
         float norm_sq = 0.0f;
-        for (int i = 0; i < d; i++) norm_sq += src[i] * src[i];
+        for (int i = 0; i < d; i++) {
+            float val = isfinite(src[i]) ? src[i] : 0.0f;
+            norm_sq += val * val;
+        }
         float norm = sqrtf(norm_sq);
+        if (!isfinite(norm)) {
+            norm = 0.0f;
+        }
 
         /* Normalize */
         float normalized[TURBO_D];
         if (norm > 1e-10f) {
             const float inv = 1.0f / norm;
-            for (int i = 0; i < d; i++) normalized[i] = src[i] * inv;
+            for (int i = 0; i < d; i++) {
+                float val = isfinite(src[i]) ? src[i] : 0.0f;
+                normalized[i] = val * inv;
+            }
         } else {
             memset(normalized, 0, d * sizeof(float));
         }
@@ -475,6 +484,9 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
         }
         float recon_norm = sqrtf(recon_norm_sq);
         float corrected_norm = (recon_norm > 1e-10f) ? norm / recon_norm : norm;
+        if (!isfinite(corrected_norm)) {
+            corrected_norm = 0.0f;
+        }
         y[block].norm = GGML_FP32_TO_FP16(corrected_norm);
 #else
         /* Step 3: 3-bit quantization (8 centroids) */
@@ -554,6 +566,9 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
     };
     for (int block = 0; block < nb; block++) {
         float norm = GGML_FP16_TO_FP32(x[block].norm);
+        if (!isfinite(norm)) {
+            norm = 0.0f;
+        }
         float rotated[QK_TURBO4];
         for (int i = 0; i < d; i++) {
             uint8_t idx = (x[block].qs[i / 2] >> ((i % 2) * 4)) & 0xF;
@@ -569,6 +584,9 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
     turbo_init_qjl();
     for (int block = 0; block < nb; block++) {
         float norm  = GGML_FP16_TO_FP32(x[block].norm);
+        if (!isfinite(norm)) {
+            norm = 0.0f;
+        }
 
         uint8_t indices[TURBO_D];
         for (int i = 0; i < d; i++) {
@@ -588,6 +606,9 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
         }
 
         float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
+        if (!isfinite(rnorm)) {
+            rnorm = 0.0f;
+        }
         const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
 
         float rotated_recon[TURBO_D];
