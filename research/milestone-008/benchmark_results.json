@@ -1,0 +1,28 @@
+{
+    "model": "sha256-8de95da68dc485c0889c205384c24642f83ca18d089559c977ffc6a3972a71a8",
+    "n_tokens": 32,
+    "runs": 2,
+    "configurations": {
+        "baseline": {
+            "prompt_tps_mean": 6252.0,
+            "prompt_tps_stdev": 82.16580797387734,
+            "gen_tps_mean": 217.8,
+            "gen_tps_stdev": 1.697056274847718,
+            "wall_s_mean": 0.9309225770000467
+        },
+        "native-paged": {
+            "prompt_tps_mean": 6119.950000000001,
+            "prompt_tps_stdev": 264.2458041294127,
+            "gen_tps_mean": 218.64999999999998,
+            "gen_tps_stdev": 2.899137802864841,
+            "wall_s_mean": 0.8995359589999907
+        },
+        "triattention": {
+            "prompt_tps_mean": 6539.8,
+            "prompt_tps_stdev": 44.26488450227813,
+            "gen_tps_mean": 222.14999999999998,
+            "gen_tps_stdev": 0.07071067811865073,
+            "wall_s_mean": 0.8978628334999712
+        }
+    }
+}
