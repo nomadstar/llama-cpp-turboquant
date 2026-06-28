@@ -1,0 +1,10 @@
+{
+    "model": "mistral-uncensored",
+    "model_size_mb": 3918,
+    "vram_available_mb": 3754,
+    "page_budget": 512,
+    "gen_tps": null,
+    "exit_code": 0,
+    "loaded_successfully": true
+}
+

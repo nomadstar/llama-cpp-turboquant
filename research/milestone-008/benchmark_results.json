@@ -1,28 +1,14 @@
 {
-    "model": "sha256-8de95da68dc485c0889c205384c24642f83ca18d089559c977ffc6a3972a71a8",
-    "n_tokens": 32,
-    "runs": 2,
+    "model": "sha256-0725ca79e7415d9a23d0cdcd3f2376c1b989777dd07cd8c088af23bb4fc1fa28",
+    "n_tokens": 16,
+    "runs": 1,
     "configurations": {
         "baseline": {
-            "prompt_tps_mean": 6252.0,
-            "prompt_tps_stdev": 82.16580797387734,
-            "gen_tps_mean": 217.8,
-            "gen_tps_stdev": 1.697056274847718,
-            "wall_s_mean": 0.9309225770000467
-        },
-        "native-paged": {
-            "prompt_tps_mean": 6119.950000000001,
-            "prompt_tps_stdev": 264.2458041294127,
-            "gen_tps_mean": 218.64999999999998,
-            "gen_tps_stdev": 2.899137802864841,
-            "wall_s_mean": 0.8995359589999907
-        },
-        "triattention": {
-            "prompt_tps_mean": 6539.8,
-            "prompt_tps_stdev": 44.26488450227813,
-            "gen_tps_mean": 222.14999999999998,
-            "gen_tps_stdev": 0.07071067811865073,
-            "wall_s_mean": 0.8978628334999712
+            "prompt_tps_mean": null,
+            "prompt_tps_stdev": null,
+            "gen_tps_mean": null,
+            "gen_tps_stdev": null,
+            "wall_s_mean": 2.7003304099998786
         }
     }
 }

@@ -71,6 +71,22 @@ on groups of 128 elements (typically one head dimension).
 
 ---
 
+## Benchmarks — RTX 2050 (4 GB VRAM)
+
+Measured with `scripts/benchmark.py`, full GPU offload (`-ngl 99`), 32 tokens, 2 runs.
+
+| Model | Size | Prompt (t/s) | Generation (t/s) |
+|---|---|---|---|
+| qwen2.5-coder-1.5b | 1.1 GB | 2921 | 97.4 |
+| qwen2.5-coder-3b | 1.8 GB | 1736 | 59.1 |
+| llama3.2-3b | 1.9 GB | 1833 | 50.2 |
+| llama3.1-8b Q2_K | 3.0 GB | 715 | 29.7 |
+
+All sub-4 GB quantized models run comfortably. IQ-family quants (IQ2_S, IQ3_XS) are not
+yet supported (require importance-based quantization kernels from upstream llama.cpp).
+
+---
+
 ## Validation Results
 
 ### CPU/CUDA Mathematical Consistency Audit
