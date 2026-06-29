@@ -51,9 +51,9 @@ unchanged. TurboQuant types are opt-in via `--cache-type-k` / `--cache-type-v`.
 | KV Cache Layer-Adaptive Quantization | ✅ Working |
 | Quality Gate (automated PPL + speed) | ✅ Operational |
 | Paged Attention (Phase 1) | ✅ Functional |
-| Paged Attention (Phase 2) | 🚧 Implemented — Pending GPU Validation |
+| Paged Attention (Phase 2) | 🚧 Implemented — Known n_seq FA bug; workaround: `-fa off` |
 | TriAttention | 🚧 Implemented — Pending Validation |
-| TriAttention Calibration (M007) | 🔄 Infrastructure Ready — Pending GPU/Model Run |
+| TriAttention Calibration (M007) | 🔄 H6.1 INDETERMINADO — batch mode prevents eviction; generation-mode eval needed |
 | ROCm / HIP Portability Audit | ✅ Complete — HIP compatibility fixes validated |
 | Metal Support | ✅ Stable |
 | Vulkan Support | ❌ Not Started |
@@ -295,7 +295,7 @@ on a validated foundation.
 - [x] Phase 1: Gather-before-FA with dynamic page allocation (✅ Functional)
 - [x] Phase 2: Native paged FA (page-table-lookup in kernel) (🚧 Pending Validation)
 - [x] Phase 3: TriAttention KV eviction via RoPE-inverted key scoring (🚧 Pending Validation)
-- [x] M007: TriAttention calibration infrastructure (`scripts/triattention_calibrate.py`, milestone stubs) (🔄 Pending GPU run)
+- [x] M007: TriAttention calibration infrastructure (`scripts/triattention_calibrate.py`, milestone stubs, calibration run complete — H6.1 INDETERMINADO; generation-mode eval required)
 - [ ] Sliding window support
 - [ ] Continuous batching
 
@@ -303,6 +303,7 @@ on a validated foundation.
 
 - `scripts/turbo-quality-gate.sh` — automated PPL + speed quality gate
 - `scripts/triattention_calibrate.py` — baseline vs eviction calibration runner for H6.1; writes `research/milestone-007/calibration_results.json`
+- `scripts/multiswarm.py` — multi-agent task runner; `--audit` / `--audit-scope` mode runs opencode as a code auditor and writes `.multiswarm_audit.md`
 
 ### Phase 4 — Backend Portability (Pending)
 

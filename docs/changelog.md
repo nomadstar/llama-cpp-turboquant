@@ -6,6 +6,55 @@
 
 ## 2026-06
 
+### M007 audit round — paged attention correctness fixes
+
+Four correctness bugs found and fixed by iterative opencode audit of `src/llama-kv-cache.cpp`:
+
+**C-01 — State save/restore silent corruption with paged V cache**
+- `state_write_data` used linear cell offsets to read V tensor data, but the paged V layout
+  is physically indirected through a page table. Linear reads hit the dummy zero block (block 0)
+  instead of actual data, silently corrupting any serialized KV state.
+- Fix: `state_write_data` now aborts with an actionable message (`LLAMA_NO_PAGING=1` workaround);
+  `state_read_data` now returns `false` with an error log.
+
+**H-02 — Stack array OOB when seq_id ≥ LLAMA_MAX_SEQ in `set_input_kq_mask_impl`**
+- `seq_pos_min[LLAMA_MAX_SEQ]` was indexed by an unbounded `seq_id` from the ubatch with no
+  bounds check, risking stack corruption on malformed batches.
+- Fix: Added `GGML_ASSERT(ubatch->n_seq_id[i] > 0)` before reading `seq_id[i][0]`, and
+  `GGML_ASSERT(seq_id >= 0 && (size_t)seq_id < seq_to_stream.size())` to match the existing
+  codebase assertion pattern (used at 8+ other call sites).
+
+**Pool undercount for n_stream > 1**
+- `pg_n_blocks = n_pages_per_stream * n_stream` left `n_stream - 1` physical blocks at the end
+  of the V tensor permanently unreachable (pool never filled to them, V tensor too small).
+- Fix: `pg_n_blocks = (n_pages_per_stream + 1) * n_stream - 1`. The extra `+1` per stream
+  is the dummy zero block overhead; the `-1` accounts for block 0 not being in the pool.
+
+**seq_to_stream shrink bug for n_stream > 1**
+- Constructor shrank `seq_to_stream` from `LLAMA_MAX_SEQ` to `n_stream` when `n_stream > 1`,
+  causing OOB access for any `seq_id ≥ n_stream`.
+- Fix: Remove the second `.resize(n_stream)` call; vector stays at `LLAMA_MAX_SEQ`.
+
+### M007 calibration run — H6.1 INDETERMINADO
+
+**Calibration results** (`-fa off`, qwen2.5-coder-1.5b, wikitext-2, ctx=2048):
+- Baseline PPL: 10.9552
+- Eviction PPL (50% page budget): 10.9552 (Δ = 0)
+
+**Why Δ = 0**: `pg_alloc_for_sinfo` protects pages in `current_batch_pages` from eviction.
+In `llama-perplexity` batch mode, *all* pages are in the current batch, so the budget is never
+enforced. This is correct behavior (don't evict pages being written) but means TriAttention
+eviction is a generation-mode-only mechanism.
+
+**H6.1 verdict**: INDETERMINADO. Generation-mode evaluation required (`llama-cli --predict`
+with a long prompt). Infrastructure and workaround documented in `research/milestone-007/`.
+
+**Phase 2 FA n_seq bug** (documented, not yet fixed): CUDA kernel indexes `v_ptable[seq * n0 + lpage]`
+where `seq` iterates over `n_seq`, but the page table has only `n_stream` rows. With
+`n_stream=1` and `n_seq=4`, indices 1–3 are OOB → corrupted V values → PPL ≈ 35125.
+Workaround: `-fa off`. Pending fix: expand page table to `max(ns, n_seq)` rows in
+`set_input_v_page_table` / `build_input_v_page_table`.
+
 ### M007 - TriAttention calibration and numerical validation infrastructure
 
 **Feature**: Added the calibration/validation scaffolding for hypothesis H6.1.
