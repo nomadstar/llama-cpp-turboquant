@@ -171,8 +171,8 @@ public:
 
     // PagedAttention: get V pool as flat view and build/fill page table tensor
     ggml_tensor * get_v_paged(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
-    ggml_tensor * build_input_v_page_table(ggml_context * ctx, uint32_t n_kv, const slot_info & sinfo) const;
-    void          set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, const slot_info & sinfo) const;
+    ggml_tensor * build_input_v_page_table(ggml_context * ctx, uint32_t n_kv, const slot_info & sinfo, uint32_t n_seq) const;
+    void          set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, const slot_info & sinfo, uint32_t n_seq) const;
 
     // Allocate physical pages for all cells assigned in sinfo (called after real apply_ubatch)
     void pg_alloc_for_sinfo(const slot_info & sinfo);
@@ -385,7 +385,7 @@ public:
     // PagedAttention V gather support
     bool          is_paged() const;
     ggml_tensor * get_v_paged(ggml_context * ctx, int32_t il) const;
-    ggml_tensor * build_input_v_page_table(ggml_context * ctx) const;
+    ggml_tensor * build_input_v_page_table(ggml_context * ctx, uint32_t n_seq) const;
     void          set_input_v_page_table(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     // TurboQuant rotation accessors

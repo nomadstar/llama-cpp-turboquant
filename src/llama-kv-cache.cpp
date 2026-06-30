@@ -1443,11 +1443,14 @@ ggml_tensor * llama_kv_cache::get_v_paged(ggml_context * ctx, int32_t il, uint32
     return ggml_reshape_2d(ctx, v, v->ne[0], pool_rows);
 }
 
-ggml_tensor * llama_kv_cache::build_input_v_page_table(ggml_context * ctx, uint32_t n_kv, const slot_info & sinfo) const {
+ggml_tensor * llama_kv_cache::build_input_v_page_table(ggml_context * ctx, uint32_t n_kv, const slot_info & sinfo, uint32_t n_seq) const {
     GGML_ASSERT(pg_enabled);
-    const uint32_t ns     = sinfo.s1 - sinfo.s0 + 1;
+    const uint32_t ns      = sinfo.s1 - sinfo.s0 + 1;
+    // The FA kernel indexes the page table by batch-sequence (0..n_seq-1), not by stream.
+    // Allocate max(ns, n_seq) rows so the kernel never reads past the end of the table.
+    const uint32_t n_rows  = std::max(ns, n_seq);
     const uint32_t n_lpage = (n_kv + pg_block_size - 1) / pg_block_size;
-    ggml_tensor * ptable = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_lpage, ns);
+    ggml_tensor * ptable = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_lpage, n_rows);
     // Store block_size in op_params so the graph builder can retrieve it without access to kv internals
     int32_t bs = (int32_t) pg_block_size;
     memcpy(ptable->op_params, &bs, sizeof(int32_t));
@@ -1455,20 +1458,27 @@ ggml_tensor * llama_kv_cache::build_input_v_page_table(ggml_context * ctx, uint3
     return ptable;
 }
 
-void llama_kv_cache::set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, const slot_info & sinfo) const {
+void llama_kv_cache::set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, const slot_info & sinfo, uint32_t n_seq) const {
     GGML_ASSERT(pg_enabled);
     const uint32_t ns      = sinfo.s1 - sinfo.s0 + 1;
+    const uint32_t n_rows  = (uint32_t) dst->ne[1];  // max(ns, n_seq) set at build time
     const uint32_t n_lpage = (uint32_t) dst->ne[0];
-    const uint32_t nelems  = ns * n_lpage;
+    const uint32_t nelems  = n_rows * n_lpage;
 
     // Build the page table in a temporary host buffer, then push via
     // ggml_backend_tensor_set which works for both host and device tensors.
+    //
+    // Row r of the page table corresponds to FA batch-sequence r (0..n_seq-1).
+    // Map row r to its stream by clamping to [0, ns-1].  When ns=1 (single
+    // stream, the common perplexity case) every row is a copy of stream 0 —
+    // all sequences share the same physical page pool and the same mapping.
+    // When ns==n_seq each row maps to a distinct stream (1:1 assignment).
     std::vector<int32_t> tmp(nelems);
-    for (uint32_t s = 0; s < ns; ++s) {
-        const uint32_t strm = sinfo.s0 + s;
+    for (uint32_t r = 0; r < n_rows; ++r) {
+        const uint32_t strm = sinfo.s0 + std::min(r, ns - 1);
         for (uint32_t lp = 0; lp < n_lpage; ++lp) {
             const int32_t pblock = pg_page_table[strm][lp];
-            tmp[s * n_lpage + lp] = (pblock >= 0) ? pblock : 0;
+            tmp[r * n_lpage + lp] = (pblock >= 0) ? pblock : 0;
         }
     }
 #if defined(TURBO_DIAG_KQ)
@@ -1489,6 +1499,7 @@ void llama_kv_cache::set_input_v_page_table(ggml_tensor * dst, uint32_t n_kv, co
 #endif
     ggml_backend_tensor_set(dst, tmp.data(), 0, nelems * sizeof(int32_t));
     (void) n_kv;
+    (void) n_seq;
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
@@ -2781,12 +2792,13 @@ ggml_tensor * llama_kv_cache_context::get_v_paged(ggml_context * ctx, int32_t il
     return kv->get_v_paged(ctx, il, n_kv, sinfos[i_cur]);
 }
 
-ggml_tensor * llama_kv_cache_context::build_input_v_page_table(ggml_context * ctx) const {
-    return kv->build_input_v_page_table(ctx, n_kv, sinfos[i_cur]);
+ggml_tensor * llama_kv_cache_context::build_input_v_page_table(ggml_context * ctx, uint32_t n_seq) const {
+    return kv->build_input_v_page_table(ctx, n_kv, sinfos[i_cur], n_seq);
 }
 
-void llama_kv_cache_context::set_input_v_page_table(ggml_tensor * dst, const llama_ubatch * /*ubatch*/) const {
-    kv->set_input_v_page_table(dst, n_kv, sinfos[i_cur]);
+void llama_kv_cache_context::set_input_v_page_table(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    const uint32_t n_seq = ubatch ? (uint32_t) ubatch->n_seqs : (uint32_t) dst->ne[1];
+    kv->set_input_v_page_table(dst, n_kv, sinfos[i_cur], n_seq);
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {

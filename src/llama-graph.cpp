@@ -2045,7 +2045,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
         if (mctx_cur->is_paged()) {
-            inp->self_v_page_table = mctx_cur->build_input_v_page_table(ctx0);
+            inp->self_v_page_table = mctx_cur->build_input_v_page_table(ctx0, (uint32_t) ubatch.n_seqs);
         }
 
         inp->self_kq_mask = build_kq_mask(ctx0, mctx_cur, ubatch, cparams);
