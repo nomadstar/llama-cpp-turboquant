@@ -2129,6 +2129,14 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
+    // Paged V layout is indirected through the page table; linear reads would
+    // corrupt the serialized state. Fail early before any bytes are written.
+    if (pg_enabled) {
+        LLAMA_LOG_ERROR("%s: state save not supported with paged attention (pg_enabled=true); "
+                        "set LLAMA_NO_PAGING=1 to use state serialization\n", __func__);
+        return;
+    }
+
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -2251,14 +2259,6 @@ void llama_kv_cache::state_write_meta(llama_io_write_i & io, const cell_ranges_t
 }
 
 void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const {
-    // Paged V layout is physically indirected through the page table; linear
-    // cell-offset reads would hit the dummy zero block instead of real data.
-    // State save/restore is not supported with paged attention.
-    if (pg_enabled) {
-        GGML_ABORT("state save/restore is not supported when paged attention is enabled (pg_enabled=true). "
-                   "Disable paging with LLAMA_NO_PAGING=1 to use state serialization.");
-    }
-
     const auto & cells = v_cells[cr.strm];
 
     const uint32_t v_trans = this->v_trans ? 1 : 0;
