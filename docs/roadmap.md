@@ -14,15 +14,20 @@
 | TurboQuant CUDA correctness | ✅ |
 | CPU/CUDA mathematical equivalence audit | ✅ |
 | Llama validation (PPL within 0.4 for turbo4) | ✅ |
+| Explicit turbo4 NaN validation (Hito 004) | ✅ |
+| ROCm backend completion (HIP warp/ballot fixes) | ✅ |
 | Initial ROCm portability audit | ✅ |
+| TriAttention KV eviction implementation (M006) | ✅ |
+| TriAttention calibration infrastructure (M007) | ✅ |
+| Phase 2 FA n_seq OOB fix | ✅ |
+| CI correctness fixes (state serialization guards, EditorConfig) | ✅ |
 
 ### Upcoming
 
 | Milestone | Priority |
 |---|---|
-| Paged Attention Phase 2 (native paged FA) | P2 |
-| Explicit turbo4 NaN validation | P1 |
-| ROCm backend completion | P3 |
+| Paged Attention Phase 2 — numerical validation (n_seq bug fixed) | P2 |
+| TriAttention H6.1 validation (generation-mode eval) | P4 |
 | Large-scale benchmarks (multi-GPU, multi-model) | P2 |
 | Upstream synchronization | P3 |
 
@@ -121,8 +126,9 @@ on a validated foundation.
 | `LLAMA_NO_PAGING` env var gate | P1 | ✅ |
 | Fix device sync race in paged KV write | P1 | ✅ |
 | Fix K-cache isolation (flat pool indices) | P1 | ✅ |
-| Phase 2: Native paged FA (page table in kernel) | P2 | 🔄 In Progress |
-| Phase 3: TurboQuant-aware block alignment | P2 | ⬜ Pending |
+| Phase 2: Native paged FA (n_seq bug fixed — pending numerical validation) | P2 | 🔄 Needs validation |
+| Phase 3: TriAttention KV eviction (H6.1 pending gen-mode eval) | P4 | 🔄 Implemented |
+| Phase 4: TurboQuant-aware block alignment | P2 | ⬜ Pending |
 | Sliding window support | P2 | ⬜ Pending |
 | Continuous batching | P2 | ⬜ Pending |
 | Prefix sharing between sequences | P2 | ⬜ Pending |
@@ -184,15 +190,15 @@ has not yet been scheduled.
 
 ## Immediate Next Steps
 
-1. **Explicit turbo4 NaN validation**: Verify that turbo4 dequantization produces no NaN
-   or inf values under any valid input distribution. Priority P1.
-2. **Complete Paged Attention Phase 2**: Integrate page table lookup directly into the
-   Flash Attention VEC kernel, eliminating the gather overhead.
-3. **ROCm backend completion**: Resolve the minimal remaining API-compatibility blockers
-   to complete the HIP backend.
-4. **Large-scale benchmarks**: Systematic benchmark harness across multiple GPUs, model
+1. **Validate Phase 2 paged FA** (`-fa on` without `-fa off` workaround): run
+   `llama-perplexity` with `--triattention-page-budget` and confirm PPL matches the
+   no-paging baseline. The n_seq OOB bug is fixed; this step closes the validation gap.
+2. **H6.1 generation-mode evaluation**: write `scripts/triattention_generation_eval.py`
+   to test TriAttention eviction quality in autoregressive mode (the only mode where
+   eviction actually fires — batch mode protects all pages from eviction).
+3. **Large-scale benchmarks**: Systematic benchmark harness across multiple GPUs, model
    sizes, and context lengths.
-5. **Upstream synchronization**: Rebase against latest `ggml-org/llama.cpp` master to
+4. **Upstream synchronization**: Rebase against latest `ggml-org/llama.cpp` master to
    incorporate upstream fixes and features.
-6. **Expand validation**: Add more model families to the validation suite (Gemma, Mistral,
+5. **Expand validation**: Add more model families to the validation suite (Gemma, Mistral,
    DeepSeek).
