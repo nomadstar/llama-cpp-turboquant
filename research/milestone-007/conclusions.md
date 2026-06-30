@@ -1,6 +1,6 @@
 # Milestone 007: Conclusions
 
-**Fecha de cierre parcial**: 2026-06-28  
+**Fecha de cierre parcial**: 2026-06-28
 **Estado**: PARCIALMENTE COMPLETO — Infraestructura lista, H6.1 pendiente de validación en generación
 
 ---

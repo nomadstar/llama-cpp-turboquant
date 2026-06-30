@@ -53,6 +53,10 @@ insert_final_newline = unset
 trim_trailing_whitespace = unset
 insert_final_newline = unset
 
+[data/*.txt]
+trim_trailing_whitespace = unset
+insert_final_newline = unset
+
 [tools/server/webui/**]
 indent_style = unset
 indent_size = unset

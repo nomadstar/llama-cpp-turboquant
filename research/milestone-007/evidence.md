@@ -1,8 +1,8 @@
 # Milestone 007: Evidence
 
-**Fecha**: 2026-06-28  
-**Hardware**: NVIDIA RTX 2050 (4 GB VRAM), Linux  
-**Modelo**: qwen2.5-coder-1.5b-bf16.gguf  
+**Fecha**: 2026-06-28
+**Hardware**: NVIDIA RTX 2050 (4 GB VRAM), Linux
+**Modelo**: qwen2.5-coder-1.5b-bf16.gguf
 **Corpus**: data/wikitext2-test.txt (wikitext-2 test split, 1,287,655 bytes)
 
 ---
