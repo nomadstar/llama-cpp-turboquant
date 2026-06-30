@@ -1642,6 +1642,26 @@ void launch_fattn(
     );
     CUDA_CHECK(cudaGetLastError());
 
+#if defined(TURBO_DIAG_FA_PAGED)
+    // Paged FA diagnostic: dump first few page table entries and V pool data
+    if (v_ptable_data) {
+        static int s_paged_diag = 0;
+        if (s_paged_diag++ < 3) {
+            CUDA_CHECK(cudaStreamSynchronize(main_stream));
+            int32_t pt[8] = {};
+            int npt = v_ptable_ne0 < 8 ? v_ptable_ne0 : 8;
+            CUDA_CHECK(cudaMemcpy(pt, v_ptable_data, npt * sizeof(int32_t), cudaMemcpyDeviceToHost));
+            fprintf(stderr, "[PAGED_FA_DIAG] v_ptable_ne0=%d v_block_size=%d nb21=%zu nb22=%zu\n",
+                    v_ptable_ne0, v_block_size, (size_t)nb21, (size_t)nb22);
+            fprintf(stderr, "[PAGED_FA_DIAG] ptable[0..%d]: ", npt-1);
+            for (int i = 0; i < npt; i++) fprintf(stderr, "%d ", pt[i]);
+            fprintf(stderr, "\n[PAGED_FA_DIAG] V.ne=[%lld,%lld,%lld,%lld] V.nb=[%zu,%zu,%zu,%zu]\n",
+                    (long long)V->ne[0], (long long)V->ne[1], (long long)V->ne[2], (long long)V->ne[3],
+                    V->nb[0], V->nb[1], V->nb[2], V->nb[3]);
+        }
+    }
+#endif
+
 #if defined(TURBO_DIAG_KQ)
     // CPU-side diagnostic: for K=turbo3 VEC path, verify KQ dot product after first kernel call.
     if (!need_f16_K && K->type == GGML_TYPE_TURBO3_0) {

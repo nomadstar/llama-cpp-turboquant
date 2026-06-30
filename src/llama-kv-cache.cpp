@@ -1451,9 +1451,15 @@ ggml_tensor * llama_kv_cache::build_input_v_page_table(ggml_context * ctx, uint3
     const uint32_t n_rows  = std::max(ns, n_seq);
     const uint32_t n_lpage = (n_kv + pg_block_size - 1) / pg_block_size;
     ggml_tensor * ptable = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_lpage, n_rows);
-    // Store block_size in op_params so the graph builder can retrieve it without access to kv internals
+    // op_params[0]: pg_block_size — used by gather kernel and Phase 1 path
+    // op_params[1]: ns (physical stream count) — used by Phase 2 FA to size the pool view
+    //   The view must use ns (pool rows), NOT n_rows (page-table rows), because ggml_view_4d
+    //   checks that view size fits within the source tensor. The FA kernel ignores V's ne[3]
+    //   when a page table is present (it uses the page table for all address translation).
     int32_t bs = (int32_t) pg_block_size;
-    memcpy(ptable->op_params, &bs, sizeof(int32_t));
+    int32_t ns_i32 = (int32_t) ns;
+    memcpy(ptable->op_params,     &bs,     sizeof(int32_t));
+    memcpy(ptable->op_params + 1, &ns_i32, sizeof(int32_t));
     ggml_set_input(ptable);
     return ptable;
 }

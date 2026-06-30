@@ -2115,33 +2115,49 @@ ggml_tensor * llm_graph_context::build_attn(
 
         const int32_t n_kv_val = (int32_t) mctx_cur->get_n_kv();
         int32_t bs;
-        memcpy(&bs, v_ptable->op_params, sizeof(int32_t));
+        int32_t ns_phys;  // physical stream count (pool rows), distinct from n_seq (page-table rows)
+        memcpy(&bs,      v_ptable->op_params,     sizeof(int32_t));
+        memcpy(&ns_phys, v_ptable->op_params + 1, sizeof(int32_t));
 
         if (cparams.flash_attn) {
-            // Phase 2: native paged FA — skip gather, pass pool + page table directly.
-            // Pool shape: [n_embd_v, n_total_physical_slots]
-            // FA expects V as 4D: [head_v_eff, n_head_kv, n_kv_logical, n_seq]
-            // We create a 4D view of the pool with n_kv_logical rows (logical addressing).
-            // The kernel resolves physical rows via the page table.
+            // Phase 2: native paged FA — pass pool + page table directly to the kernel.
+            //
+            // Pool layout: [n_embd_v, total_slots] where each column is one physical slot
+            // holding all heads concatenated: [head0_d0..d(D-1), head1_d0..., ...].
+            //
+            // The CUDA FA kernel (fattn-vec.cuh) receives:
+            //   nb21 = V->nb[1]  → used as per-slot stride in v_paged_ptr:
+            //                       V_base + (pblock*bs + within) * nb21
+            //   nb22 = V->nb[2]  → head offset: V += nb22 * (head / gqa_ratio)
+            //
+            // For correct addressing nb21 must be the per-slot stride (n_embd_v*elem) and
+            // nb22 must be the per-head offset within a slot (head_v_eff*elem).
+            //
+            // ns_phys (from op_params[1]) is used — NOT v_ptable->ne[1] (=max(n_stream,n_seq))
+            // — so the view's total byte span fits within the pool allocation.
             const int64_t n_embd_v   = v_pool->ne[0];
             const int64_t n_head_kv  = (int64_t) hparams.n_head_kv(il);
             const int64_t head_v_eff = n_embd_v / n_head_kv;
-            const int64_t ns         = v_ptable->ne[1];
+            // nb[1] and nb[2] here are BEFORE the permute(0,2,1,3) in build_attn_mha.
+            // After that permute: new_nb[1]=old_nb[2], new_nb[2]=old_nb[1].
+            // The CUDA kernel receives: nb21=new_nb[1]=n_embd_v*elem (slot stride) ✓
+            //                           nb22=new_nb[2]=head_v_eff*elem (head-within-slot) ✓
+            // v_trans = (old_nb[1] > old_nb[2]) = (head_v_eff < n_embd_v) → false → no extra transpose.
             v = ggml_view_4d(ctx0, v_pool,
-                    head_v_eff, n_head_kv, n_kv_val, ns,
-                    ggml_row_size(v_pool->type, head_v_eff),
-                    ggml_row_size(v_pool->type, n_embd_v),
+                    head_v_eff, n_head_kv, n_kv_val, (int64_t)ns_phys,
+                    ggml_row_size(v_pool->type, head_v_eff),           // nb[1] → nb22 after permute (head stride)
+                    ggml_row_size(v_pool->type, n_embd_v),             // nb[2] → nb21 after permute (slot stride)
                     ggml_row_size(v_pool->type, n_embd_v) * (int64_t)n_kv_val,
                     0);
         } else {
             // Phase 1 fallback (non-FA path): materialise V contiguously via gather.
+            // gather_paged_v produces a flat [n_embd_v, n_kv_val*ns_phys] tensor; view it as 4D.
             v = ggml_gather_paged_v(ctx0, v_pool, v_ptable, n_kv_val, bs);
             const int64_t n_embd_v   = v_pool->ne[0];
             const int64_t n_head_kv  = (int64_t) hparams.n_head_kv(il);
             const int64_t head_v_eff = n_embd_v / n_head_kv;
-            const int64_t ns         = v_ptable->ne[1];
             v = ggml_view_4d(ctx0, v,
-                    head_v_eff, n_head_kv, n_kv_val, ns,
+                    head_v_eff, n_head_kv, n_kv_val, (int64_t)ns_phys,
                     ggml_row_size(v->type, head_v_eff),
                     ggml_row_size(v->type, n_embd_v),
                     ggml_row_size(v->type, n_embd_v * n_kv_val),
